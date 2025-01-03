@@ -25,17 +25,17 @@ MY_HOSTNAME_FILE="$MY_STATUS_CONFIG_DIR/status_hostname_list.txt"
 MY_TOMCAT_HOME="/u01/app/appserver/tomcat/apache-tomcat-9.0.76/webapps/ROOT"
 
 # Where should the HTML status page be stored?
-MY_STATUS_HTML="$MY_TOMCAT_HOME/status_index.html"
+MY_STATUS_HTML="$MY_TOMCAT_HOME/index.html"
 
 # Where should the SVG status icon be stored?
-MY_STATUS_ICON="$HOME/status.svg"
+MY_STATUS_ICON="$MY_TOMCAT_HOME/status.svg"
 # Icon colors
 MY_STATUS_ICON_COLOR_SUCCESS="lime"
 MY_STATUS_ICON_COLOR_WARNING="orange"
 MY_STATUS_ICON_COLOR_DANGER="red"
 
 # Where should the JSON status page be stored? Set to "" to disable JSON output
-MY_STATUS_JSON="$HOME/status.json"
+MY_STATUS_JSON="$MY_TOMCAT_HOME/status.json"
 
 # Text file in which you can place a status message.
 # If the file exists and has a content, all errors on the status page are overwritten.

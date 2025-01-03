@@ -58,7 +58,7 @@ esac
 
 # if a config file has been specified with MY_STATUS_CONFIG=myfile use this one, otherwise default to config
 if [[ -z "$MY_STATUS_CONFIG" ]]; then
-	MY_STATUS_CONFIG="$BASE_PATH/config"
+	MY_STATUS_CONFIG="$BASE_PATH/config_status"
 fi
 if [ -e "$MY_STATUS_CONFIG" ]; then
 	if [[ "$BE_LOUD" = "yes" ]] || [[ "$BE_QUIET" = "no" ]]; then
@@ -84,67 +84,67 @@ fi
 #      ~~~ End of example file ~~~
 
 # Title for the status page
-MY_STATUS_TITLE=${MY_STATUS_TITLE:-"Status Page"}
+#MY_STATUS_TITLE=${MY_STATUS_TITLE:-"Status Page"}
 
 # Link for the homepage button
-MY_HOMEPAGE_URL=${MY_HOMEPAGE_URL:-""}
+#MY_HOMEPAGE_URL=${MY_HOMEPAGE_URL:-""}
 
 # Text for the homepage button
-MY_HOMEPAGE_TITLE=${MY_HOMEPAGE_TITLE:-"Homepage"}
+#MY_HOMEPAGE_TITLE=${MY_HOMEPAGE_TITLE:-"Homepage"}
 
 # Auto refresh interval in seconds 0 is no refresh
-MY_AUTOREFRESH=${MY_AUTOREFRESH:-"0"}
+#MY_AUTOREFRESH=${MY_AUTOREFRESH:-"0"}
 
 # Shortcut to place the configuration file in a folder.
 # Save it without / at the end.
-MY_STATUS_CONFIG_DIR=${MY_STATUS_CONFIG_DIR:-"$HOME/status"}
+#MY_STATUS_CONFIG_DIR=${MY_STATUS_CONFIG_DIR:-"$HOME/status"}
 
 # List with the configuration. What do we want to monitor?
-MY_HOSTNAME_FILE=${MY_HOSTNAME_FILE:-"$MY_STATUS_CONFIG_DIR/status_hostname_list.txt"}
+#MY_HOSTNAME_FILE=${MY_HOSTNAME_FILE:-"$MY_STATUS_CONFIG_DIR/status_hostname_list.txt"}
 
 # Where should the HTML status page be stored?
-MY_STATUS_HTML=${MY_STATUS_HTML:-"$HOME/status_index.html"}
+#MY_STATUS_HTML=${MY_STATUS_HTML:-"$HOME/status_index.html"}
 
 # Where should the SVG status icon be stored?
-MY_STATUS_ICON=${MY_STATUS_ICON:-"$HOME/status.svg"}
+#MY_STATUS_ICON=${MY_STATUS_ICON:-"$HOME/status.svg"}
 # Icon colors
-MY_STATUS_ICON_COLOR_SUCCESS=${MY_STATUS_ICON_COLOR_SUCCESS:-"lime"}
-MY_STATUS_ICON_COLOR_WARNING=${MY_STATUS_ICON_COLOR_WARNING:-"orange"}
-MY_STATUS_ICON_COLOR_DANGER=${MY_STATUS_ICON_COLOR_DANGER:-"red"}
+#MY_STATUS_ICON_COLOR_SUCCESS=${MY_STATUS_ICON_COLOR_SUCCESS:-"lime"}
+#MY_STATUS_ICON_COLOR_WARNING=${MY_STATUS_ICON_COLOR_WARNING:-"orange"}
+#MY_STATUS_ICON_COLOR_DANGER=${MY_STATUS_ICON_COLOR_DANGER:-"red"}
 
 # Where should the JSON status page be stored? Set to "" to disable JSON output
-MY_STATUS_JSON=${MY_STATUS_JSON:-"$HOME/status.json"}
+#MY_STATUS_JSON=${MY_STATUS_JSON:-"$HOME/status.json"}
 
 # Text file in which you can place a status message.
 # If the file exists and has a content, all errors on the status page are overwritten.
-MY_MAINTENANCE_TEXT_FILE=${MY_MAINTENANCE_TEXT_FILE:-"$MY_STATUS_CONFIG_DIR/status_maintenance_text.txt"}
+#MY_MAINTENANCE_TEXT_FILE=${MY_MAINTENANCE_TEXT_FILE:-"$MY_STATUS_CONFIG_DIR/status_maintenance_text.txt"}
 
 # Duration we wait for response (nc, curl and traceroute).
-MY_TIMEOUT=${MY_TIMEOUT:-"2"}
+#MY_TIMEOUT=${MY_TIMEOUT:-"2"}
 
 # Duration we wait for response (only ping).
-MY_PING_TIMEOUT=${MY_PING_TIMEOUT:-"4"}
-MY_PING_COUNT=${MY_PING_COUNT:-"2"}
+#MY_PING_TIMEOUT=${MY_PING_TIMEOUT:-"4"}
+#MY_PING_COUNT=${MY_PING_COUNT:-"2"}
 
 # Duration we wait for response (only script)
-MY_SCRIPT_TIMEOUT=${MY_SCRIPT_TIMEOUT:-20}
+#MY_SCRIPT_TIMEOUT=${MY_SCRIPT_TIMEOUT:-20}
 
 # Route to host
-MY_TRACEROUTE_HOST=${MY_TRACEROUTE_HOST:-"1.1.1.1"} # Cloudflare DNS
+#MY_TRACEROUTE_HOST=${MY_TRACEROUTE_HOST:-"1.1.1.1"} # Cloudflare DNS
 # Sets the number of probe packets per hop
-MY_TRACEROUTE_NQUERIES=${MY_TRACEROUTE_NQUERIES:-"1"}
+#MY_TRACEROUTE_NQUERIES=${MY_TRACEROUTE_NQUERIES:-"1"}
 
 # Location for the status files. Please do not edit created files.
-MY_HOSTNAME_STATUS_OK=${MY_HOSTNAME_STATUS_OK:-"$MY_STATUS_CONFIG_DIR/status_hostname_ok.txt"}
-MY_HOSTNAME_STATUS_DOWN=${MY_HOSTNAME_STATUS_DOWN:-"$MY_STATUS_CONFIG_DIR/status_hostname_down.txt"}
-MY_HOSTNAME_STATUS_LASTRUN=${MY_HOSTNAME_STATUS_LASTRUN:-"$MY_STATUS_CONFIG_DIR/status_hostname_last.txt"}
-MY_HOSTNAME_STATUS_DEGRADE=${MY_HOSTNAME_STATUS_DEGRADE:-"$MY_STATUS_CONFIG_DIR/status_hostname_degrade.txt"}
-MY_HOSTNAME_STATUS_LASTRUN_DEGRADE=${MY_HOSTNAME_STATUS_LASTRUN_DEGRADE:-"$MY_STATUS_CONFIG_DIR/status_hostname_last_degrade.txt"}
-MY_HOSTNAME_STATUS_HISTORY=${MY_HOSTNAME_STATUS_HISTORY:-"$MY_STATUS_CONFIG_DIR/status_hostname_history.txt"}
-MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT=${MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT:-"/tmp/status_hostname_history_sort.txt"}
+#MY_HOSTNAME_STATUS_OK=${MY_HOSTNAME_STATUS_OK:-"$MY_STATUS_CONFIG_DIR/status_hostname_ok.txt"}
+#MY_HOSTNAME_STATUS_DOWN=${MY_HOSTNAME_STATUS_DOWN:-"$MY_STATUS_CONFIG_DIR/status_hostname_down.txt"}
+#MY_HOSTNAME_STATUS_LASTRUN=${MY_HOSTNAME_STATUS_LASTRUN:-"$MY_STATUS_CONFIG_DIR/status_hostname_last.txt"}
+#MY_HOSTNAME_STATUS_DEGRADE=${MY_HOSTNAME_STATUS_DEGRADE:-"$MY_STATUS_CONFIG_DIR/status_hostname_degrade.txt"}
+#MY_HOSTNAME_STATUS_LASTRUN_DEGRADE=${MY_HOSTNAME_STATUS_LASTRUN_DEGRADE:-"$MY_STATUS_CONFIG_DIR/status_hostname_last_degrade.txt"}
+#MY_HOSTNAME_STATUS_HISTORY=${MY_HOSTNAME_STATUS_HISTORY:-"$MY_STATUS_CONFIG_DIR/status_hostname_history.txt"}
+#MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT=${MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT:-"/tmp/status_hostname_history_sort.txt"}
 
 # Minimum downtime in seconds to display in past incidents
-MY_MIN_DOWN_TIME=${MY_MIN_DOWN_TIME:-"60"}
+#MY_MIN_DOWN_TIME=${MY_MIN_DOWN_TIME:-"60"}
 
 # CSS Stylesheet for the status page
 #MY_STATUS_STYLESHEET=${MY_STATUS_STYLESHEET:-"$MY_STATUS_CONFIG_DIR/css/bootstrap.min.css"}
@@ -153,17 +153,17 @@ MY_MIN_DOWN_TIME=${MY_MIN_DOWN_TIME:-"60"}
 #MY_STATUS_FONTAWESOME=${MY_STATUS_FONTAWESOME:-"$MY_STATUS_CONFIG_DIR/css/all.min.css"}
 
 # A footer
-MY_STATUS_FOOTER=${MY_STATUS_FOOTER:-'Powered by Ellucian EMS Static Monitoring'}
+#MY_STATUS_FOOTER=${MY_STATUS_FOOTER:-'Powered by Ellucian EMS Static Monitoring'}
 
 # Lock file to prevent duplicate execution.
 # If this file exists, status.sh script is terminated.
 # If something has gone wrong and the file has not been deleted automatically, you can delete it.
-MY_STATUS_LOCKFILE=${MY_STATUS_LOCKFILE:-"/tmp/STATUS_SH_IS_RUNNING.lock"}
+#MY_STATUS_LOCKFILE=${MY_STATUS_LOCKFILE:-"/tmp/STATUS_SH_IS_RUNNING.lock"}
 
 # Date format for the web page.
 # UTC (`-u`) is the default.
 # Example: 2021-12-23 12:34:55 UTC
-MY_DATE_TIME=${MY_DATE_TIME:-$(date -u "+%Y-%m-%d %H:%M:%S %Z")}
+#MY_DATE_TIME=${MY_DATE_TIME:-$(date -u "+%Y-%m-%d %H:%M:%S %Z")}
 # Can be changed. Example with system time:
 # MY_DATE_TIME=$(date "+%Y-%m-%d %H:%M:%S")
 # Avoid semicolons.

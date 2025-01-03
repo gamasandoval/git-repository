@@ -49,10 +49,9 @@
 # http-status;<URL>;<STATUS CODE>
 #
 http-status;http://ansible-master:8080/index1.html;200
-http-status;http://ansible-master:8080/index1.html;200
 http-status;http://ansible-master:8080/index2.html;200
+http-status;http://ansible-master:8080/index3.html;200
 http-status;http://ansible-master:8080/sample/hello.jsp;200
-#http-status;http://ansible-master:8080/index2.html;200
 #
 # grep;<URL>;<ONE WORD>
 #

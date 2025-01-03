@@ -1,0 +1,39 @@
+################################################################################
+#### Configuration Section for Alert.sh
+################################################################################
+
+
+# Check if term MY_CHECK can be found in the MY_HOSTNAME_STATUS_DOWN downtime file for failures
+MY_CHECK=${MY_CHECK:-"http-status"}
+# Example:
+#   Check if 'http-status' can be found and save the 805 seconds in MY_DOWN_SEC variable
+#   status_hostname_down.txt:
+#       http-status;http://ansible-master:8080/index1.html;200;75
+
+# Notification colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+CLEAR='\033[0m'
+
+
+
+
+# Send notification if downtime is greater than
+MY_ALERT_SEC=${MY_ALERT_SEC:-"300"} # 5 Minutes
+
+# Location for the downtime status file
+MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"
+MY_HOSTNAME_STATUS_DOWN=${MY_HOSTNAME_STATUS_DOWN:-"$MY_STATUS_CONFIG_DIR/status_hostname_down.txt"}
+
+# Variables used by API
+#Staging endpoint points to SN Stage
+ENDPOINT=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/staging/ms-cts-snow-webhook
+APIKEY=uqY1mXU8cR3aFgXQYVGmgaJRwiNgEheMaXquuQSG
+PLATFORM="mscts"
+MY_DATE='date "+%Y-%m-%d %H:%M:%S"'
+ASSIGNMENT_GROUP="CTS - Inf Services App Adm Team1"
+
+################################################################################
+#### END Configuration Section
+################################################################################
+
