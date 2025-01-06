@@ -19,7 +19,7 @@ CLEAR='\033[0m'
 
 
 # Send notification if downtime is greater than
-MY_ALERT_SEC=${MY_ALERT_SEC:-"300"} # 5 Minutes
+MY_ALERT_SEC=${MY_ALERT_SEC:-"0"} # 5 Minutes
 
 # Location for the downtime status file
 MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"

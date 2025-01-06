@@ -171,7 +171,7 @@ if [ -f "$MY_HOSTNAME_STATUS_DOWN" ]; then
                         #f_log "URL: $MY_URL"
                         #f_log "DOWNTIME: $MY_DOWNTIME"
 						if [[ $MY_ALERT_SEC -lt $MY_DOWNTIME ]]; then
-						#MY_ALERT_SEC (100) 
+						#MY_ALERT_SEC (300) 5m 
 						echo "$MY_URL current downtime: $((MY_DOWNTIME/60))m creating ticket ..."
 						else
 						echo "$MY_URL has been down less than $((MY_ALERT_SEC/60))m current downtime: $((MY_DOWNTIME/60))m"

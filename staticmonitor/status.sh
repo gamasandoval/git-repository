@@ -428,7 +428,7 @@ function save_downtime() {
 			printf " %s" "$MY_PORT"
 		fi
 		if [[ $MY_COMMAND == "http-status" ]]; then
-			printf " %s" "$MY_PORT"
+			printf " %s" #"$MY_PORT"
 		fi
 	fi
 }
@@ -459,7 +459,7 @@ function save_availability() {
 			printf " %s" "$MY_PORT"
 		fi
 		if [[ $MY_COMMAND == "http-status" ]]; then
-			printf " %s" "$MY_PORT"
+			printf " %s" #"$MY_PORT"
 		fi
 	fi
 }
@@ -524,11 +524,20 @@ $MY_AUTOREFRESH_TEXT
 	<h1>
 		$MY_STATUS_TITLE
 		<span class="float-right d-none d-sm-block">
+		<a href="$MY_HOMEPAGE_URL" class="btn btn-primary" role="button">
+				<i class="fas fa-home"></i>
+				$MY_HOMEPAGE_TITLE
+			</a>
 		</span>
 	</h1>
 </div>
 
-
+<div class="d-sm-none d-md-none d-lg-none d-xl-none my-3">
+	<a href="$MY_HOMEPAGE_URL" class="btn btn-primary" role="button">
+		<i class="fas fa-home"></i>
+		$MY_HOMEPAGE_TITLE
+	</a>
+</div>
 EOF
 }
 

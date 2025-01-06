@@ -6,10 +6,10 @@
 MY_STATUS_TITLE="Static Monitoring"
 
 # Link for the homepage button
-#MY_HOMEPAGE_URL="https://github.com/Cyclenerd/static_status"
+MY_HOMEPAGE_URL="https://github.com/Cyclenerd/static_status"
 
 # Text for the homepage button
-#MY_HOMEPAGE_TITLE=" "
+MY_HOMEPAGE_TITLE=" "
 
 # Auto refresh interval in seconds 0 is no refresh
 MY_AUTOREFRESH="0"
