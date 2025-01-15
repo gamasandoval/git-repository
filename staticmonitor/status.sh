@@ -377,7 +377,7 @@ function check_downtime() {
 	MY_HOSTNAME="$2"
 	MY_PORT="$3"
 	MY_DOWN_TIME="0"
-	while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME || [[ -n "$MY_DOWN_COMMAND" ]]; do
+	while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME MY_INC || [[ -n "$MY_DOWN_COMMAND" ]]; do
 		if [[ "$MY_DOWN_COMMAND" = "ping" ]] ||
 		   [[ "$MY_DOWN_COMMAND" = "ping6" ]] ||
 		   [[ "$MY_DOWN_COMMAND" = "nc" ]] ||
@@ -419,7 +419,8 @@ function save_downtime() {
 	MY_PORT="$3"
 	MY_DOWN_TIME="$4"
 	printf "\\n%s;%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" "$MY_DOWN_TIME" >> "$MY_HOSTNAME_STATUS_DOWN"
-	if [[ "$BE_LOUD" = "yes" ]] || [[ "$BE_QUIET" = "no" ]]; then
+	#printf "\\n%s%s%s%s\\n" "$MY_COMMAND;" "$MY_HOSTNAME;" "$MY_PORT;" "$MY_DOWN_TIME" >> "$MY_HOSTNAME_STATUS_DOWN"
+		if [[ "$BE_LOUD" = "yes" ]] || [[ "$BE_QUIET" = "no" ]]; then
 		printf "\\n%b %-5s %-4s %s"  "$MY_RED DOWN: $MY_COMMAND $MY_HOSTNAME $MY_CLEAR" 
 		if [[ $MY_COMMAND == "nc" ]]; then
 			printf " %s" "$(port_to_name "$MY_PORT")"
@@ -438,7 +439,8 @@ function save_degradetime() {
 	MY_COMMAND="$1"
 	MY_HOSTNAME="$2"
 	MY_DEGRADE_TIME="$3"
-	printf "\\n%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_DEGRADE_TIME" >> "$MY_HOSTNAME_STATUS_DEGRADE"
+	printf "\\n%s;%s;%s\\n" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_DEGRADE_TIME" >> "$MY_HOSTNAME_STATUS_DEGRADE"
+	#printf "\\n%s%s%s\\n" "$MY_COMMAND;" "$MY_HOSTNAME;" "$MY_DEGRADE_TIME" >> "$MY_HOSTNAME_STATUS_DEGRADE"
 	if [[ "$BE_LOUD" = "yes" ]] || [[ "$BE_QUIET" = "no" ]]; then
 		printf "\\n%-5s %-4s %s" "DEGRADED:" "$MY_COMMAND" "$MY_HOSTNAME"
 	fi
@@ -450,6 +452,7 @@ function save_availability() {
 	MY_HOSTNAME="$2"
 	MY_PORT="$3"
 	printf "\\n%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" >> "$MY_HOSTNAME_STATUS_OK"
+	#printf "\\n%s%s%s\\n" "$MY_COMMAND;" "$MY_HOSTNAME;" "$MY_PORT" >> "$MY_HOSTNAME_STATUS_OK"
 	if [[ "$BE_LOUD" = "yes" ]]; then
 		printf "\\n%b %-5s %-4s %s"  "$MY_GREEN OK: $MY_COMMAND $MY_HOSTNAME $MY_CLEAR" 
 		if [[ $MY_COMMAND == "nc" ]]; then
@@ -472,7 +475,8 @@ function save_history() {
 	MY_DOWN_TIME="$4"
 	MY_DATE_TIME="$5"
 	if cp "$MY_HOSTNAME_STATUS_HISTORY" "$MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT" &> /dev/null; then
-		printf "\\n%s;%s;%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" "$MY_DOWN_TIME" "$MY_DATE_TIME" > "$MY_HOSTNAME_STATUS_HISTORY"
+	    printf "\\n%s;%s;%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" "$MY_DOWN_TIME" "$MY_DATE_TIME" > "$MY_HOSTNAME_STATUS_HISTORY"
+		#printf "\\n%s;%s;%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" "$MY_DOWN_TIME" "$MY_DATE_TIME" > "$MY_HOSTNAME_STATUS_HISTORY"
 		cat "$MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT" >> "$MY_HOSTNAME_STATUS_HISTORY"
 		rm "$MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT" &> /dev/null
 	else
@@ -881,7 +885,7 @@ while IFS=';' read -r MY_COMMAND MY_HOSTNAME_STRING MY_PORT || [[ -n "$MY_COMMAN
 		else
 			check_downtime "$MY_COMMAND" "$MY_HOSTNAME_STRING" "$MY_PORT"
 			save_downtime "$MY_COMMAND" "$MY_HOSTNAME_STRING" "$MY_PORT" "$MY_DOWN_TIME"
-		fi
+			fi
 	elif [[ "$MY_COMMAND" = "grep" ]]; then
 		(( MY_HOSTNAME_COUNT++ ))
 		if curl --no-buffer -fs --max-time "$MY_TIMEOUT" "$MY_HOSTNAME" | grep -q "$MY_PORT"  &> /dev/null; then

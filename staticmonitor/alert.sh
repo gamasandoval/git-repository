@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 
-# alert.sh
+# alert.sh 
 # Author: gsandoval
 # This script will call create function and SN ticket will be created
 #
-# The MY_HOSTNAME_STATUS_DOWN downtime file is searched with grep.
+# The MY_HOSTNAME_STATUS_DOWN downtime file is reviewed to create the tickets.
+# The MY_HOSTNAME_STATUS_OK file is reviewed to resolve the tickets.
 # If the seconds of the downtime are greater than or equal to the defined seconds MY_ALERT_SEC,
 # a ServiceNow ticket will be created.
 # Usage: alert.sh 
 # Usage: alert.sh debug|help 
 #
 # Add this script to your crontab. Example:
-# */1 8-22 * * * bash alarm.sh -c "127.0.0.1" -m "nils@localhost" -d 60
-# */1    * * * * bash alarm.sh -c "nc;www.heise.de" -m "other@email.local"
+# */1    * * * * bash alarm.sh 
 #
 
 MY_SCRIPT_NAME=$(basename "$0")
@@ -26,28 +26,32 @@ BASE_PATH=$(dirname "$0")
 #      Just create a file named 'config' at the location of this script.
 
 # if a config file has been specified with MY_STATUS_CONFIG=myfile use this one, otherwise default to config
-if [[ -z "$MY_STATUS_CONFIG" ]]; then
-	MY_STATUS_CONFIG="$BASE_PATH/config_alert"
-fi
-if [ -e "$MY_STATUS_CONFIG" ]; then
-	# ignore SC1090
-	# shellcheck source=/dev/null
-	source "$MY_STATUS_CONFIG"
-fi
+MY_STATUS_CONFIG="$BASE_PATH/config_status"
+MY_STATUS_CONFIG_ALERT="$BASE_PATH/config_alert"
+source "$MY_STATUS_CONFIG"
+source "$MY_STATUS_CONFIG_ALERT"
+
+
+
 
 # Check if term MY_CHECK can be found in the MY_HOSTNAME_STATUS_DOWN downtime file for failures
 #MY_CHECK=${MY_CHECK:-"http-status"}
+MY_INC=${MY_INC:-""}
+
+#MY_DATE_TIME=$(date "+%Y-%m-%d %H:%M:%S")
 # Example:
 #   Check if 'http-status' can be found and save the 805 seconds in MY_DOWN_SEC variable
 #   status_hostname_down.txt:
 #       http-status;http://ansible-master:8080/index1.html;200;75
 
 # Send notification if downtime is greater than
-#MY_ALERT_SEC=${MY_ALERT_SEC:-"300"} # 5 Minutes
+#MY_ALERT_SEC=${MY_ALERT_SEC:-"100"} # 1 seg
 
 # Location for the downtime status file
-#MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"
-#MY_HOSTNAME_STATUS_DOWN=${MY_HOSTNAME_STATUS_DOWN:-"$MY_STATUS_CONFIG_DIR/status_hostname_down.txt"}
+
+#MY_STATUS_CONFIG_DIR="/home/mobaxterm"
+#MY_HOSTNAME_STATUS_OK="status_hostname_ok.txt"
+#MY_HOSTNAME_STATUS_DOWN="status_hostname_down.txt"
 
 
 ################################################################################
@@ -79,10 +83,15 @@ debug_variables() {
 	echo "MY_SCRIPT_NAME: $MY_SCRIPT_NAME"
 	echo "MY_CHECK: $MY_CHECK"
 	echo "BASE_PATH: $BASE_PATH"
+	echo "MY_STATUS_CONFIG_DIR: $MY_STATUS_CONFIG_DIR"
+	echo "MY_STATUS_CONFIG: $MY_STATUS_CONFIG"
+	echo "MY_HOSTNAME_STATUS_OK: $MY_HOSTNAME_STATUS_OK"
+	echo "MY_HOSTNAME_STATUS_DOWN: $MY_HOSTNAME_STATUS_DOWN"
+	echo "MY_HOSTNAME_STATUS_INC: $MY_HOSTNAME_STATUS_INC"
+	echo "MY_HOSTNAME_STATUS_INC_TMP: $MY_HOSTNAME_STATUS_INC_TMP"
 	echo "MY_ALERT_SEC: $MY_ALERT_SEC"
 	
 }	
-
 
 #Fuction for logging pusposes, it receives script name and text to log
 function f_log {
@@ -94,7 +103,7 @@ function f_log {
                        echo "$(eval "$MY_DATE"): $MSG"
                                 elif [[ -n "$COLOR" && $COLOR == "green"  ]]; then
                                 echo -e "$(eval "$MY_DATE"): ${GREEN}$MSG${CLEAR}"
-                                elif [[ "$COLOR == red" ]]; then
+                                elif [[ "$COLOR" == "red" ]]; then
                                 echo -e "$(eval "$MY_DATE"): ${RED}$MSG${CLEAR}"
                 else
                 echo "This never happens"
@@ -102,91 +111,142 @@ function f_log {
 
 }
 
-function f_checkfile {
-# Check downtime file
-if [ ! -r "$MY_HOSTNAME_STATUS_DOWN" ]; then
-	echo "Can not read downtime file '$MY_HOSTNAME_STATUS_DOWN'"
+function f_checkmaintenance {
+	if [ -f "$MY_MAINTENANCE_TEXT_FILE" ]; then
+		f_log "Maintenance file $MY_MAINTENANCE_TEXT_FILE exists... Alerts will not be created"
+        f_log "END of script"
+        exit 0;
+	fi
+}
+
+function f_cleanfile {
+f_log ""
+f_log "removing content of : $1 "
+rm -f "$1"; touch "$1"
+}
+
+function f_resetfilefromtmp {
+f_log ""
+#f_log "removing content of : $1 "
+if cp "$MY_HOSTNAME_STATUS_INC_TMP" "$MY_HOSTNAME_STATUS_INC" &> /dev/null; then
+		f_log "Copied tmp file to inc and then cleaned the tmp file"
+		f_cleanfile "$MY_HOSTNAME_STATUS_INC_TMP"
+else
+	f_log "Could not reset tmp file "
 	exit 1
 fi
 }
 
+function f_copyincfile {
+if cp "$MY_HOSTNAME_STATUS_INC" "$MY_HOSTNAME_STATUS_INC_TMP" &> /dev/null; then
+	f_log "Copied inc file to tmp and then cleaned the incfile"
+    f_cleanfile "$MY_HOSTNAME_STATUS_INC"
+	else
+	f_log "Could not copy file: $MY_HOSTNAME_STATUS_INC "
+	exit 1
+	fi	
+}
+
 function f_createticket {
-SEVERITY="$1"
-SNDATE=$(echo -e "$(eval "$MY_DATE")")
-
-SN_CURL=$(curl -s --header "Content-Type: application/json" --header "x-api-key: $APIKEY" --request POST --data '{ "platform": "'$PLATFORM'", "app": "'$APP'", "instance": "'$INSTANCE'", "customer_shortname": "'$CUSTOMER_SHORTNAME'", "date": "'"$SNDATE"'", "host": "'$SNHOST'", "servicenow": {"short_description": "'"$SHORT_DESCRIPTION"'", "customer": "'"$CUSTOMER"'", "priority" : '$PRIORITY', "environment": "'$ENVIRONMENT'", "assignment_group": "'"$ASSIGNMENT_GROUP"'", "description": "'"$DESCRIPTION"'"}, "severity": "'$SEVERITY'"}' $ENDPOINT)
-CURL_STATUS=$?
- #curl --header "Content-Type: application/json" --header "x-api-key: $apikey" --request POST --data '{ "platform": "'$platform'", "app": "'$app'", "instance": "'$instance'", "customer_shortname": "'$customer_shortname'", "date": "'"$sndate"'", "host": "'$snhost'", "servicenow": {"short_description": "'"$short_description"'", "customer": "'"$customer"'", "priority" : '$priority', "environment": "'$environment'", "assignment_group": "'"$assignment_group"'", "description": "'"$description"'"}, "severity": "'$severity'"}' $endpoint
-SNINC_NUM=$(echo -e "$SN_CURL" | grep INC | awk -F ':' '{print $2}' | awk -F',' '{print $1}' | tr -d '"')
-SNINC_STATE=$(echo -e "$SN_CURL" | grep INC | awk -F ':' '{print $3}' | awk -F',' '{print $1}' | tr -d '"')
-#f_log "Curl Incident: $sninc_num ..."
-#f_log "Curl State: $sninc_state ..."
-
-
-    #Validate if ticket was created with output status
-        if [ $CURL_STATUS -ne 0 ]; then
-          f_log "Failed to create ticket ..."
-          #f_log "Curl status from error $curlstatus ..."
-          else
-            #f_log "Curl status from else $curlstatus ..."
-                if [ -z "$SNINC_NUM" ]; then
-                    f_log "No need to create ticket, Service is running fine" "green"
-                    #f_log "Curl Incident from -z : $SNINC_NUM ..."
-                elif  [[ -n "$SNINC_NUM" && "$SNINC_STATE" -eq "1"  ]]; then
-                         ticketMsj="Ticket number $SNINC_NUM has been created."
-                         f_log "$ticketMsj" "red"
-                         entryList+=( "<tr bgColor=$tableBGColorNoOK> <td>$SNINC_NUM</td> <td> " $ticketMsj " </td> </tr>" )
-                         echo "$SNINC_NUM" > $inc_lock
-                         f_log "Creating lockfile $inc_lock with incident $sninSNINC_NUMc_num" "green"
-                        # f_log "Curl Incident from state 1: $SNINC_NUM ..."
-                        # f_log "Curl State from state 1: $SNINC_STATE ..."
-                elif [[ -n "$SNINC_NUM" && "$SNINC_STATE" -eq "6" ]]; then
-                         ticketMsj="Ticket number $SNINC_NUM has been closed."
-                         entryList+=( "<tr bgColor=$tableBGColorOK> <td>$SNINC_NUM</td> <td> " $ticketMsj " </td> </tr>" )
-                         f_log "$ticketMsj" "green"
-                         rm -f $inc_lock
-                         f_log "Removing lockfile $inc_lock" "green"
-                         #f_log "Curl Incident from state 6: $SNINC_NUM ..."
-                         #f_log "Curl State from state 6: $SNINC_STATE ..."
-                fi
-
-   fi
-
+MY_RANDOM_INC="$((RANDOM%1000))"
+#f_log "Ticket created : "INC$MY_RANDOM_INC""
+#f_log "from function INC: $MY_INC "
+echo "INC$MY_RANDOM_INC"
 }
 
-
-function f_readerrors()
-{
-
-# Check if the file exists
-if [ -f "$MY_HOSTNAME_STATUS_DOWN" ]; then
-    f_log "Parsing filename: $MY_HOSTNAME_STATUS_DOWN"
-    # Parsing file with Client and Environment
-    TMP_HOSTS_DOWN=$(mktemp)
-    cat $MY_HOSTNAME_STATUS_DOWN | grep $MY_CHECK > "$TMP_HOSTS_DOWN"
-    while read line;
-                do
-                        MY_URL=$(echo "$line" | awk -F ';' '{print $2}' )
-						MY_DOWNTIME=$(echo "$line" | awk -F ';' '{print $4}' )
-                        #f_log "URL: $MY_URL"
-                        #f_log "DOWNTIME: $MY_DOWNTIME"
-						if [[ $MY_ALERT_SEC -lt $MY_DOWNTIME ]]; then
-						#MY_ALERT_SEC (300) 5m 
-						echo "$MY_URL current downtime: $((MY_DOWNTIME/60))m creating ticket ..."
-						else
-						echo "$MY_URL has been down less than $((MY_ALERT_SEC/60))m current downtime: $((MY_DOWNTIME/60))m"
-						fi
-        done < "$TMP_HOSTS_DOWN"
-#    f_Run_Cmd rm -f "$temp_urlfile"
-else
-    f_log "Error - File does not exist: $URL_FILE"
-    f_log " - END - "
-    exit 0
-fi
-
+# save_incidents()
+function save_incidents() {
+	MY_SAVE_COMMAND="$1"
+	MY_SAVE_HOSTNAME="$2"
+	MY_SAVE_PORT="$3"
+	MY_SAVE_DOwNTIME="$4"
+    MY_SAVE_INC="$5"
+f_log ""
+f_log "Starting function save_incidents"
+f_log "Saving Line: $MY_SAVE_COMMAND $MY_SAVE_HOSTNAME $MY_SAVE_PORT $MY_SAVE_DOwNTIME $MY_SAVE_INC "
+printf "\\n%s;%s;%s;%s;%s" "$MY_SAVE_COMMAND" "$MY_SAVE_HOSTNAME" "$MY_SAVE_PORT" "$MY_SAVE_DOwNTIME" "$MY_SAVE_INC" >> "$MY_HOSTNAME_STATUS_INC"
 }
 
+function isticketopen() {
+	MY_DOWN_HOSTNAME="$1"
+	MY_DOWN_HOSTNAME_TICKET=$(grep "$MY_DOWN_HOSTNAME" "$MY_HOSTNAME_STATUS_INC_TMP" | awk -F ';' '{print $5}')
+	f_log ""
+	f_log "Checking if ticket is open"
+	LINE=$(grep "$MY_DOWN_HOSTNAME" "$MY_HOSTNAME_STATUS_INC_TMP")
+	f_log "LINE : $LINE"
+	f_log "MY_DOWN_HOSTNAME: $MY_DOWN_HOSTNAME"
+	f_log "MY_DOWN_HOSTNAME_TICKET: $MY_DOWN_HOSTNAME_TICKET"
+	if [ -n "$MY_DOWN_HOSTNAME_TICKET" ]; then
+		MY_INC="$MY_DOWN_HOSTNAME_TICKET"
+		#f_log "MY_DOWN_HOSTNAME_TICKET: $MY_INC"
+	else
+    	f_log "ticket is empty"   
+		MY_INC="" 
+	fi
+}
 
+#
+# Check and save status
+#
+function f_read_errors() {
+f_log ""
+f_log "Starting function f_read_errors"
+MY_HOSTNAME_COUNT=0
+while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME|| [[ -n "$MY_DOWN_COMMAND" ]]; do
+	MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
+    if [[ "$MY_DOWN_COMMAND" = "http-status" ]]; then
+		(( MY_HOSTNAME_COUNT++))
+		f_log ""
+		f_log "Line: $MY_HOSTNAME_COUNT "
+		# Check status change
+		f_log "ERROR Line: $MY_DOWN_COMMAND $MY_DOWN_HOSTNAME $MY_DOWN_PORT $MY_DOWN_TIME "
+		isticketopen "$MY_DOWN_HOSTNAME"
+
+			if [[ $MY_DOWN_TIME -gt $MY_ALERT_SEC && -z $MY_INC ]]; then #50000 & ticket empty
+			    f_log "$MY_DOWN_HOSTNAME current downtime: $MY_DOWN_TIME and MY_ALERT_SEC $MY_ALERT_SEC creating ticket ..."
+				MY_INC=$(f_createticket)
+				f_log "New incident created: $MY_INC "
+				save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
+				else
+					if [[ $MY_DOWN_TIME -lt $MY_ALERT_SEC  ]]; then
+			    	f_log "$MY_URL has been down less than $MY_ALERT_SEC current downtime: $MY_DOWN_TIME"     
+						elif [[ -n "$MY_INC" ]]; then
+						save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
+					fi
+							
+			fi	
+    fi        
+done <"$MY_HOSTNAME_STATUS_DOWN"
+#f_resetfilefromtmp "$MY_HOSTNAME_STATUS_INC"
+#f_cleanfile "$MY_HOSTNAME_STATUS_INC_TMP"
+}
+
+function f_read_ok() {
+f_log ""	
+f_log "Starting function f_read_ok"
+MY_HOSTNAME_COUNT=0
+while IFS=';' read -r MY_OK_COMMAND MY_OK_HOSTNAME MY_OK_PORT|| [[ -n "$MY_OK_COMMAND" ]]; do
+	#MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
+    if [[ "$MY_OK_COMMAND" = "http-status" ]]; then
+		(( MY_HOSTNAME_COUNT++))
+		# Check status change
+		f_log ""
+		f_log "Line: $MY_HOSTNAME_COUNT "
+        f_log "OK Line: $MY_OK_COMMAND $MY_OK_HOSTNAME $MY_OK_PORT "
+		isticketopen "$MY_OK_HOSTNAME"
+			if [[ -z "$MY_INC" ]]; then #if ticket is empty
+			    f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME is up and no previous ticket"  
+				else
+            	f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME is up resolving ticket $MY_INC"
+				save_incidents "$MY_OK_COMMAND" "$MY_OK_HOSTNAME" "$MY_OK_PORT" "" "" 
+				#calling function to resolve ticket
+			fi
+			
+    fi        
+done <"$MY_HOSTNAME_STATUS_OK"
+#f_resetfilefromtmp "$MY_HOSTNAME_STATUS_INC_TMP"
+#f_cleanfile "$MY_HOSTNAME_STATUS_INC"
+}
 
 
 ################################################################################
@@ -209,18 +269,13 @@ if [[ -n "$ONLY_OUTPUT_DEBUG_VARIABLES" ]]; then
 	debug_variables
 	exit
 fi
-
-
-f_log "Checking if URL file exist ..."
-f_checkfile
-f_log "Reading $MY_HOSTNAME_STATUS_DOWN ..."
-f_readerrors
-
-# Check term with grep
-#MY_CHECK_MD5=$(echo "$MY_CHECK" | md5sum | grep -E -o '[a-z,0-9]+')
-#MY_HOSTNAME_STATUS_ALERT="/tmp/status_hostname_alert_$MY_CHECK_MD5"
-MY_DOWN_SEC=$(grep "$MY_CHECK" < "$MY_HOSTNAME_STATUS_DOWN" | grep -E -o '[0-9]+$')
-#MY_DEGRADED_BEFORE="false"
-MY_ALERT_NOW="false"
+f_log ""
+f_log "START of script"
+f_checkmaintenance
+f_copyincfile
+f_read_errors
+f_read_ok
+f_log ""
+f_log "END of script"
 
 

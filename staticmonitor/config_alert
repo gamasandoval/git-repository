@@ -10,6 +10,9 @@ MY_CHECK=${MY_CHECK:-"http-status"}
 #   status_hostname_down.txt:
 #       http-status;http://ansible-master:8080/index1.html;200;75
 
+#Added INC to simulate SN creation
+#MY_INC="INC1234"
+
 # Notification colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -19,11 +22,13 @@ CLEAR='\033[0m'
 
 
 # Send notification if downtime is greater than
-MY_ALERT_SEC=${MY_ALERT_SEC:-"0"} # 5 Minutes
+MY_ALERT_SEC=${MY_ALERT_SEC:-"5"} # 5 Minutes
 
 # Location for the downtime status file
-MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"
-MY_HOSTNAME_STATUS_DOWN=${MY_HOSTNAME_STATUS_DOWN:-"$MY_STATUS_CONFIG_DIR/status_hostname_down.txt"}
+#MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"
+#MY_HOSTNAME_STATUS_DOWN=${MY_HOSTNAME_STATUS_DOWN:-"$MY_STATUS_CONFIG_DIR/status_hostname_down.txt"}
+MY_HOSTNAME_STATUS_INC=${MY_HOSTNAME_STATUS_INC:-"$MY_STATUS_CONFIG_DIR/status_hostname_down_inc.txt"}
+MY_HOSTNAME_STATUS_INC_TMP=${MY_HOSTNAME_STATUS_INC_TMP:-"$MY_STATUS_CONFIG_DIR/status_hostname_down_inc_tmp.txt"}
 
 # Variables used by API
 #Staging endpoint points to SN Stage

@@ -1,3 +1,6 @@
 
-http-status;http://ansible-master:8080/index2.html;200;547;2025-01-06 12:38:02
-http-status;http://ansible-master:8080/index1.html;200;77;2025-01-06 12:29:46
+http-status;http://ansible-master:8080/index3.html;200;105;2025-01-15 13:14:10
+http-status;http://ansible-master:8080/index2.html;200;78;2025-01-15 13:13:43
+http-status;http://ansible-master:8080/index2.html;200;211;2025-01-15 12:45:48
+http-status;http://ansible-master:8080/index1.html;200;185;2025-01-15 12:45:48
+http-status;http://ansible-master:8080/index3.html;200;233;2025-01-15 12:44:42
