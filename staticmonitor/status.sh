@@ -377,7 +377,8 @@ function check_downtime() {
 	MY_HOSTNAME="$2"
 	MY_PORT="$3"
 	MY_DOWN_TIME="0"
-	while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME MY_INC || [[ -n "$MY_DOWN_COMMAND" ]]; do
+	#while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME MY_INC || [[ -n "$MY_DOWN_COMMAND" ]]; do
+	while IFS=';' read MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME MY_INC || [[ -n "$MY_DOWN_COMMAND" ]]; do
 		if [[ "$MY_DOWN_COMMAND" = "ping" ]] ||
 		   [[ "$MY_DOWN_COMMAND" = "ping6" ]] ||
 		   [[ "$MY_DOWN_COMMAND" = "nc" ]] ||
@@ -649,7 +650,7 @@ function item_down() {
 		elif [[ "$MY_DOWN_COMMAND" = "curl" ]]; then
 			echo "Site $MY_DOWN_HOSTNAME"
 		elif [[ "$MY_DOWN_COMMAND" = "http-status" ]]; then
-			echo "HTTP status $MY_DOWN_PORT of $MY_DOWN_HOSTNAME"
+			echo "<a target="_blank" href="$MY_DOWN_HOSTNAME">$MY_DOWN_HOSTNAME </a>"
 		elif [[ "$MY_DOWN_COMMAND" = "grep" ]]; then
 			echo "Grep for \"$MY_DOWN_PORT\" on  $MY_DOWN_HOSTNAME"
 		elif [[ "$MY_DOWN_COMMAND" = "traceroute" ]]; then
@@ -795,7 +796,8 @@ fi
 #
 
 MY_HOSTNAME_COUNT=0
-while IFS=';' read -r MY_COMMAND MY_HOSTNAME_STRING MY_PORT || [[ -n "$MY_COMMAND" ]]; do
+#while IFS=';' read -r MY_COMMAND MY_HOSTNAME_STRING MY_PORT || [[ -n "$MY_COMMAND" ]]; do
+while IFS=';' read MY_COMMAND MY_HOSTNAME_STRING MY_PORT || [[ -n "$MY_COMMAND" ]]; do
 	MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
 	if [[ "$MY_COMMAND" = "ping" ]]; then
 		(( MY_HOSTNAME_COUNT++ ))
@@ -875,7 +877,7 @@ while IFS=';' read -r MY_COMMAND MY_HOSTNAME_STRING MY_PORT || [[ -n "$MY_COMMAN
 		fi
 	elif [[ "$MY_COMMAND" = "http-status" ]]; then
 		(( MY_HOSTNAME_COUNT++))
-		if [[ $(curl -s -o /dev/null -I --max-time "$MY_TIMEOUT" -w "%{http_code}" "$MY_HOSTNAME" 2>/dev/null) == "$MY_PORT" ]]; then
+		if [[ $(curl -k -s -o /dev/null -I --max-time "$MY_TIMEOUT" -w "%{http_code}" "$MY_HOSTNAME" 2>/dev/null) == "$MY_PORT" ]]; then
 			check_downtime "$MY_COMMAND" "$MY_HOSTNAME_STRING" "$MY_PORT"
 			# Check status change
 			if [[ "$MY_DOWN_TIME" -gt "0" ]]; then
@@ -954,7 +956,8 @@ MY_ITEMS_JSON=()
 # Get outage
 MY_OUTAGE_COUNT=0
 MY_OUTAGE_ITEMS=()
-while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME_STRING MY_DOWN_PORT MY_DOWN_TIME || [[ -n "$MY_DOWN_COMMAND" ]]; do
+#while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME_STRING MY_DOWN_PORT MY_DOWN_TIME || [[ -n "$MY_DOWN_COMMAND" ]]; do
+while IFS=';' read MY_DOWN_COMMAND MY_DOWN_HOSTNAME_STRING MY_DOWN_PORT MY_DOWN_TIME || [[ -n "$MY_DOWN_COMMAND" ]]; do
 	if [[ "$MY_DOWN_COMMAND" = "ping" ]] ||
 	   [[ "$MY_DOWN_COMMAND" = "ping6" ]] ||
 	   [[ "$MY_DOWN_COMMAND" = "nc" ]] ||
@@ -989,7 +992,8 @@ done <"$MY_HOSTNAME_STATUS_DEGRADE"
 # Get available systems
 MY_AVAILABLE_COUNT=0
 MY_AVAILABLE_ITEMS=()
-while IFS=';' read -r MY_OK_COMMAND MY_OK_HOSTNAME_STRING MY_OK_PORT || [[ -n "$MY_OK_COMMAND" ]]; do
+#while IFS=';' read -r MY_OK_COMMAND MY_OK_HOSTNAME_STRING MY_OK_PORT || [[ -n "$MY_OK_COMMAND" ]]; do
+while IFS=';' read MY_OK_COMMAND MY_OK_HOSTNAME_STRING MY_OK_PORT || [[ -n "$MY_OK_COMMAND" ]]; do
 	if [[ "$MY_OK_COMMAND" = "ping" ]] ||
 	   [[ "$MY_OK_COMMAND" = "ping6" ]] ||
 	   [[ "$MY_OK_COMMAND" = "nc" ]] ||
@@ -1095,7 +1099,8 @@ fi
 MY_HISTORY_COUNT=0
 MY_HISTORY_ITEMS=()
 MY_SHOW_INCIDENTS="false"
-while IFS=';' read -r MY_HISTORY_COMMAND MY_HISTORY_HOSTNAME_STRING MY_HISTORY_PORT MY_HISTORY_DOWN_TIME MY_HISTORY_DATE_TIME || [[ -n "$MY_HISTORY_COMMAND" ]]; do
+#while IFS=';' read -r MY_HISTORY_COMMAND MY_HISTORY_HOSTNAME_STRING MY_HISTORY_PORT MY_HISTORY_DOWN_TIME MY_HISTORY_DATE_TIME || [[ -n "$MY_HISTORY_COMMAND" ]]; do
+while IFS=';' read MY_HISTORY_COMMAND MY_HISTORY_HOSTNAME_STRING MY_HISTORY_PORT MY_HISTORY_DOWN_TIME MY_HISTORY_DATE_TIME || [[ -n "$MY_HISTORY_COMMAND" ]]; do
 	if [[ "$MY_HISTORY_DOWN_TIME" -ge "$MY_MIN_DOWN_TIME" ]]; then
 		MY_SHOW_INCIDENTS="true"
 		if [[ "$MY_HISTORY_COMMAND" = "ping" ]] ||
