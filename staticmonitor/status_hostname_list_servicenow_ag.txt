@@ -1,0 +1,15 @@
+#
+# Service NOW Assignment groups -  Used by alert.sh 
+#
+# How Service NOW API GETS groups? Each line one entry.
+#
+# Structure:
+# <MONITORED URL>;<APP NAME>;<SERVICENOW Assignment group>
+#<MONITORED URL>=URL being monitored and declared on status_hostname_list.txt
+#<APP NAME>=Name of the application eg. dwdashboard 
+#<SERVICENOW Assignment group>=CTS - Inf Services App Adm Team1
+#Service NOW key is integrated by customer_shortname:host"app:instance
+
+http://ansible-master:8080/index1.html;dwdashboard;CTS - Inf Services App Adm Team1
+http://ansible-master:8080/index2.html;eis;CTS - Inf Services App Adm Team1
+http://ansible-master:8080/index3.html;workflow;CTS - Inf Services App Adm Team1

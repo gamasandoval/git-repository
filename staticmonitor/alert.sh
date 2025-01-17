@@ -120,8 +120,8 @@ function f_checkmaintenance {
 }
 
 function f_cleanfile {
-f_log ""
-f_log "removing content of : $1 "
+#f_log ""
+#f_log "removing content of : $1 "
 rm -f "$1"; touch "$1"
 }
 
@@ -139,7 +139,7 @@ fi
 
 function f_copyincfile {
 if cp "$MY_HOSTNAME_STATUS_INC" "$MY_HOSTNAME_STATUS_INC_TMP" &> /dev/null; then
-	f_log "Copied inc file to tmp and then cleaned the incfile"
+	#f_log "Copied inc file to tmp and then cleaned the incfile"
     f_cleanfile "$MY_HOSTNAME_STATUS_INC"
 	else
 	f_log "Could not copy file: $MY_HOSTNAME_STATUS_INC "
@@ -154,33 +154,84 @@ MY_RANDOM_INC="$((RANDOM%1000))"
 echo "INC$MY_RANDOM_INC"
 }
 
-# save_incidents()
-function save_incidents() {
+function f_sn_ticket {
+MY_SN_URL="$1"
+MY_SN_SEVERITY="$2"
+MY_SN_DOWNTIME="$3"
+MY_SN_HOST=$(echo $MY_SN_URL | cut -d'/' -f3 | cut -d':' -f1)
+MY_SN_APP=$(grep "$MY_SN_URL" "$MY_HOSTNAME_LIST_GROUPS" | awk -F ';' '{print $2}')
+MY_SN_AG=$(grep "$MY_SN_URL" "$MY_HOSTNAME_LIST_GROUPS" | awk -F ';' '{print $3}')
+MY_SN_DATE=$(echo -e "$(eval "$MY_DATE")")
+MY_SN_SHORTDESCRIPTION="$CUSTOMER_SHORTNAME - $INSTANCE - URL down on host $MY_SN_HOST"
+MY_SN_DESCRIPTION="URL: $MY_SN_URL has been down for $MY_SN_DOWNTIME segs. Please review or take necessary actions."
+
+#f_log "APIKEY : $APIKEY"
+#f_log "PLATFORM : $PLATFORM"
+#f_log "MY_SN_APP : $MY_SN_APP"
+#f_log "INSTANCE : $INSTANCE"
+#f_log "CUSTOMER_SHORTNAME : $CUSTOMER_SHORTNAME"
+#f_log "MY_SN_DATE : $MY_SN_DATE"
+#f_log "MY_SN_HOST : $MY_SN_HOST"
+#f_log "MY_SN_SHORTDESCRIPTION : $MY_SN_SHORTDESCRIPTION"
+#f_log "CUSTOMER : $CUSTOMER"
+#f_log "PRIORITY : $PRIORITY"
+#f_log "ENVIRONMENT : $ENVIRONMENT"
+#f_log "MY_SN_AG : $MY_SN_AG"
+#f_log "ENVIRONMENT : $ENVIRONMENT"
+#f_log "MY_SN_DESCRIPTION : $MY_SN_DESCRIPTION"
+#f_log "MY_SN_SEVERITY : $MY_SN_SEVERITY"
+#f_log "ENDPOINT : $ENDPOINT"
+
+MY_SN_CURL=$(curl -s --header "Content-Type: application/json" --header "x-api-key: $APIKEY" --request POST --data '{ "platform": "'$PLATFORM'", "app": "'$MY_SN_APP'", "instance": "'$INSTANCE'", "customer_shortname": "'$CUSTOMER_SHORTNAME'", "date": "'"$MY_SN_DATE"'", "host": "'$MY_SN_HOST'", "servicenow": {"short_description": "'"$MY_SN_SHORTDESCRIPTION"'", "customer": "'"$CUSTOMER"'", "priority" : '$PRIORITY', "environment": "'$ENVIRONMENT'", "assignment_group": "'"$MY_SN_AG"'", "description": "'"$MY_SN_DESCRIPTION"'"}, "severity": "'$MY_SN_SEVERITY'"}' $ENDPOINT)
+MY_SN_CURLSTATUS=$?
+MY_SN_INC=$(echo -e "$MY_SN_CURL" | grep INC | awk -F ':' '{print $2}' | awk -F',' '{print $1}' | tr -d '"')
+MY_SN_STATE=$(echo -e "$MY_SN_CURL" | grep INC | awk -F ':' '{print $3}' | awk -F',' '{print $1}' | tr -d '"')
+
+#f_log "MY_SN_CURL : $MY_SN_CURL"
+#f_log "MY_SN_CURLSTATUS : $MY_SN_CURLSTATUS"
+#f_log "MY_SN_INC : $MY_SN_INC"
+#f_log "MY_SN_STATE : $MY_SN_STATE"
+
+    #Validate if ticket was created with output status
+        if [ $MY_SN_CURLSTATUS -ne 0 ]; then
+          f_log "Failed to create ticket ..."
+		  exit 1;
+          else
+            if  [[ -n "$MY_SN_INC" && "$MY_SN_STATE" -eq "1" ]]; then
+                   echo "$MY_SN_INC"
+			elif  [[ -n "$MY_SN_INC" && "$MY_SN_STATE" -eq "6" ]]; then
+                   f_log "Ticket $MY_SN_INC has been closed"	   
+            fi
+	    fi
+
+}
+
+function f_save_incidents() {
 	MY_SAVE_COMMAND="$1"
 	MY_SAVE_HOSTNAME="$2"
 	MY_SAVE_PORT="$3"
 	MY_SAVE_DOwNTIME="$4"
     MY_SAVE_INC="$5"
-f_log ""
-f_log "Starting function save_incidents"
-f_log "Saving Line: $MY_SAVE_COMMAND $MY_SAVE_HOSTNAME $MY_SAVE_PORT $MY_SAVE_DOwNTIME $MY_SAVE_INC "
+#f_log ""
+#f_log "Starting function save_incidents"
+#f_log "Saving Line: $MY_SAVE_COMMAND $MY_SAVE_HOSTNAME $MY_SAVE_PORT $MY_SAVE_DOwNTIME $MY_SAVE_INC "
 printf "\\n%s;%s;%s;%s;%s" "$MY_SAVE_COMMAND" "$MY_SAVE_HOSTNAME" "$MY_SAVE_PORT" "$MY_SAVE_DOwNTIME" "$MY_SAVE_INC" >> "$MY_HOSTNAME_STATUS_INC"
 }
 
-function isticketopen() {
+function f_isticketopen() {
 	MY_DOWN_HOSTNAME="$1"
 	MY_DOWN_HOSTNAME_TICKET=$(grep "$MY_DOWN_HOSTNAME" "$MY_HOSTNAME_STATUS_INC_TMP" | awk -F ';' '{print $5}')
-	f_log ""
-	f_log "Checking if ticket is open"
+	#f_log ""
+	#f_log "Checking if ticket is open"
 	LINE=$(grep "$MY_DOWN_HOSTNAME" "$MY_HOSTNAME_STATUS_INC_TMP")
-	f_log "LINE : $LINE"
-	f_log "MY_DOWN_HOSTNAME: $MY_DOWN_HOSTNAME"
-	f_log "MY_DOWN_HOSTNAME_TICKET: $MY_DOWN_HOSTNAME_TICKET"
+	#f_log "LINE : $LINE"
+	#f_log "MY_DOWN_HOSTNAME: $MY_DOWN_HOSTNAME"
+	#f_log "MY_DOWN_HOSTNAME_TICKET: $MY_DOWN_HOSTNAME_TICKET"
 	if [ -n "$MY_DOWN_HOSTNAME_TICKET" ]; then
 		MY_INC="$MY_DOWN_HOSTNAME_TICKET"
-		#f_log "MY_DOWN_HOSTNAME_TICKET: $MY_INC"
+		f_log "MY_DOWN_HOSTNAME_TICKET: $MY_INC"
 	else
-    	f_log "ticket is empty"   
+    	#f_log "ticket is empty"   
 		MY_INC="" 
 	fi
 }
@@ -189,63 +240,59 @@ function isticketopen() {
 # Check and save status
 #
 function f_read_errors() {
-f_log ""
-f_log "Starting function f_read_errors"
+#f_log ""
+#f_log "Starting function f_read_errors"
 MY_HOSTNAME_COUNT=0
 while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME|| [[ -n "$MY_DOWN_COMMAND" ]]; do
 	MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
     if [[ "$MY_DOWN_COMMAND" = "http-status" ]]; then
 		(( MY_HOSTNAME_COUNT++))
-		f_log ""
-		f_log "Line: $MY_HOSTNAME_COUNT "
+		#f_log ""
+		#f_log "Line: $MY_HOSTNAME_COUNT "
 		# Check status change
 		f_log "ERROR Line: $MY_DOWN_COMMAND $MY_DOWN_HOSTNAME $MY_DOWN_PORT $MY_DOWN_TIME "
-		isticketopen "$MY_DOWN_HOSTNAME"
+		f_isticketopen "$MY_DOWN_HOSTNAME"
 
 			if [[ $MY_DOWN_TIME -gt $MY_ALERT_SEC && -z $MY_INC ]]; then #50000 & ticket empty
 			    f_log "$MY_DOWN_HOSTNAME current downtime: $MY_DOWN_TIME and MY_ALERT_SEC $MY_ALERT_SEC creating ticket ..."
-				MY_INC=$(f_createticket)
+				MY_INC=$(f_sn_ticket "$MY_DOWN_HOSTNAME" "critical" "$MY_DOWN_TIME")
 				f_log "New incident created: $MY_INC "
-				save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
+				f_save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
 				else
 					if [[ $MY_DOWN_TIME -lt $MY_ALERT_SEC  ]]; then
 			    	f_log "$MY_URL has been down less than $MY_ALERT_SEC current downtime: $MY_DOWN_TIME"     
 						elif [[ -n "$MY_INC" ]]; then
-						save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
+						f_save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
 					fi
 							
 			fi	
     fi        
 done <"$MY_HOSTNAME_STATUS_DOWN"
-#f_resetfilefromtmp "$MY_HOSTNAME_STATUS_INC"
-#f_cleanfile "$MY_HOSTNAME_STATUS_INC_TMP"
 }
 
 function f_read_ok() {
-f_log ""	
-f_log "Starting function f_read_ok"
+#f_log ""	
+#f_log "Starting function f_read_ok"
 MY_HOSTNAME_COUNT=0
 while IFS=';' read -r MY_OK_COMMAND MY_OK_HOSTNAME MY_OK_PORT|| [[ -n "$MY_OK_COMMAND" ]]; do
 	#MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
     if [[ "$MY_OK_COMMAND" = "http-status" ]]; then
 		(( MY_HOSTNAME_COUNT++))
-		# Check status change
-		f_log ""
-		f_log "Line: $MY_HOSTNAME_COUNT "
+		#f_log ""
+		#f_log "Line: $MY_HOSTNAME_COUNT "
         f_log "OK Line: $MY_OK_COMMAND $MY_OK_HOSTNAME $MY_OK_PORT "
-		isticketopen "$MY_OK_HOSTNAME"
+		f_isticketopen "$MY_OK_HOSTNAME"
 			if [[ -z "$MY_INC" ]]; then #if ticket is empty
 			    f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME is up and no previous ticket"  
 				else
             	f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME is up resolving ticket $MY_INC"
-				save_incidents "$MY_OK_COMMAND" "$MY_OK_HOSTNAME" "$MY_OK_PORT" "" "" 
-				#calling function to resolve ticket
+				f_sn_ticket "$MY_OK_HOSTNAME" "clear" ""
+				f_save_incidents "$MY_OK_COMMAND" "$MY_OK_HOSTNAME" "$MY_OK_PORT" "" "" 
+				
 			fi
 			
     fi        
 done <"$MY_HOSTNAME_STATUS_OK"
-#f_resetfilefromtmp "$MY_HOSTNAME_STATUS_INC_TMP"
-#f_cleanfile "$MY_HOSTNAME_STATUS_INC"
 }
 
 
@@ -271,7 +318,10 @@ if [[ -n "$ONLY_OUTPUT_DEBUG_VARIABLES" ]]; then
 fi
 f_log ""
 f_log "START of script"
+f_log ""
 f_checkmaintenance
+check_file "$MY_HOSTNAME_STATUS_INC"
+check_file "$MY_HOSTNAME_STATUS_INC_TMP"
 f_copyincfile
 f_read_errors
 f_read_ok

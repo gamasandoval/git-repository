@@ -22,13 +22,14 @@ CLEAR='\033[0m'
 
 
 # Send notification if downtime is greater than
-MY_ALERT_SEC=${MY_ALERT_SEC:-"5"} # 5 Minutes
+MY_ALERT_SEC=${MY_ALERT_SEC:-"5"} # 5 Segs
 
 # Location for the downtime status file
 #MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"
 #MY_HOSTNAME_STATUS_DOWN=${MY_HOSTNAME_STATUS_DOWN:-"$MY_STATUS_CONFIG_DIR/status_hostname_down.txt"}
 MY_HOSTNAME_STATUS_INC=${MY_HOSTNAME_STATUS_INC:-"$MY_STATUS_CONFIG_DIR/status_hostname_down_inc.txt"}
 MY_HOSTNAME_STATUS_INC_TMP=${MY_HOSTNAME_STATUS_INC_TMP:-"$MY_STATUS_CONFIG_DIR/status_hostname_down_inc_tmp.txt"}
+MY_HOSTNAME_LIST_GROUPS=${MY_HOSTNAME_LIST_GROUPS:-"$MY_STATUS_CONFIG_DIR/status_hostname_list_servicenow_ag.txt"}
 
 # Variables used by API
 #Staging endpoint points to SN Stage
@@ -36,6 +37,11 @@ ENDPOINT=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/staging/ms-cts-s
 APIKEY=uqY1mXU8cR3aFgXQYVGmgaJRwiNgEheMaXquuQSG
 PLATFORM="mscts"
 MY_DATE='date "+%Y-%m-%d %H:%M:%S"'
+INSTANCE="test"
+CUSTOMER="Ellucian"
+CUSTOMER_SHORTNAME="ellucian"
+ENVIRONMENT="nonprod"
+PRIORITY="3"
 ASSIGNMENT_GROUP="CTS - Inf Services App Adm Team1"
 
 ################################################################################

@@ -6,7 +6,8 @@
 MY_STATUS_TITLE="Static Monitoring"
 
 # Link for the homepage button
-MY_HOMEPAGE_URL="https://github.com/Cyclenerd/static_status"
+#MY_HOMEPAGE_URL="https://github.com/Cyclenerd/static_status"
+MY_HOMEPAGE_URL=""
 
 # Text for the homepage button
 MY_HOMEPAGE_TITLE=" "
