@@ -322,6 +322,7 @@ f_log ""
 f_checkmaintenance
 check_file "$MY_HOSTNAME_STATUS_INC"
 check_file "$MY_HOSTNAME_STATUS_INC_TMP"
+check_config "$MY_HOSTNAME_LIST_GROUPS"
 f_copyincfile
 f_read_errors
 f_read_ok

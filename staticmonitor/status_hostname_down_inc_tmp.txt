@@ -1,3 +1,0 @@
-
-http-status;http://ansible-master:8080/index1.html;200;;
-http-status;http://ansible-master:8080/index2.html;200;;
