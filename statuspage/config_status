@@ -3,7 +3,7 @@
 ################################################################################
 
 # Title for the status page
-MY_STATUS_TITLE="Static Monitoring"
+MY_STATUS_TITLE="Ellucian Status Page"
 
 # Link for the homepage button
 #MY_HOMEPAGE_URL="https://github.com/Cyclenerd/static_status"
@@ -17,7 +17,7 @@ MY_AUTOREFRESH="0"
 
 # Shortcut to place the configuration file in a folder.
 # Save it without / at the end.
-MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"
+MY_STATUS_CONFIG_DIR="/u01/app/statuspage"
 
 # List with the configuration. What do we want to monitor?
 MY_HOSTNAME_FILE="$MY_STATUS_CONFIG_DIR/status_hostname_list.txt"

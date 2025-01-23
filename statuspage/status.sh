@@ -377,7 +377,6 @@ function check_downtime() {
 	MY_HOSTNAME="$2"
 	MY_PORT="$3"
 	MY_DOWN_TIME="0"
-	#while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME MY_INC || [[ -n "$MY_DOWN_COMMAND" ]]; do
 	while IFS=';' read MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME MY_INC || [[ -n "$MY_DOWN_COMMAND" ]]; do
 		if [[ "$MY_DOWN_COMMAND" = "ping" ]] ||
 		   [[ "$MY_DOWN_COMMAND" = "ping6" ]] ||
@@ -420,7 +419,6 @@ function save_downtime() {
 	MY_PORT="$3"
 	MY_DOWN_TIME="$4"
 	printf "\\n%s;%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" "$MY_DOWN_TIME" >> "$MY_HOSTNAME_STATUS_DOWN"
-	#printf "\\n%s%s%s%s\\n" "$MY_COMMAND;" "$MY_HOSTNAME;" "$MY_PORT;" "$MY_DOWN_TIME" >> "$MY_HOSTNAME_STATUS_DOWN"
 		if [[ "$BE_LOUD" = "yes" ]] || [[ "$BE_QUIET" = "no" ]]; then
 		printf "\\n%b %-5s %-4s %s"  "$MY_RED DOWN: $MY_COMMAND $MY_HOSTNAME $MY_CLEAR" 
 		if [[ $MY_COMMAND == "nc" ]]; then
@@ -441,7 +439,6 @@ function save_degradetime() {
 	MY_HOSTNAME="$2"
 	MY_DEGRADE_TIME="$3"
 	printf "\\n%s;%s;%s\\n" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_DEGRADE_TIME" >> "$MY_HOSTNAME_STATUS_DEGRADE"
-	#printf "\\n%s%s%s\\n" "$MY_COMMAND;" "$MY_HOSTNAME;" "$MY_DEGRADE_TIME" >> "$MY_HOSTNAME_STATUS_DEGRADE"
 	if [[ "$BE_LOUD" = "yes" ]] || [[ "$BE_QUIET" = "no" ]]; then
 		printf "\\n%-5s %-4s %s" "DEGRADED:" "$MY_COMMAND" "$MY_HOSTNAME"
 	fi
@@ -453,7 +450,6 @@ function save_availability() {
 	MY_HOSTNAME="$2"
 	MY_PORT="$3"
 	printf "\\n%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" >> "$MY_HOSTNAME_STATUS_OK"
-	#printf "\\n%s%s%s\\n" "$MY_COMMAND;" "$MY_HOSTNAME;" "$MY_PORT" >> "$MY_HOSTNAME_STATUS_OK"
 	if [[ "$BE_LOUD" = "yes" ]]; then
 		printf "\\n%b %-5s %-4s %s"  "$MY_GREEN OK: $MY_COMMAND $MY_HOSTNAME $MY_CLEAR" 
 		if [[ $MY_COMMAND == "nc" ]]; then
@@ -477,7 +473,6 @@ function save_history() {
 	MY_DATE_TIME="$5"
 	if cp "$MY_HOSTNAME_STATUS_HISTORY" "$MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT" &> /dev/null; then
 	    printf "\\n%s;%s;%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" "$MY_DOWN_TIME" "$MY_DATE_TIME" > "$MY_HOSTNAME_STATUS_HISTORY"
-		#printf "\\n%s;%s;%s;%s;%s" "$MY_COMMAND" "$MY_HOSTNAME" "$MY_PORT" "$MY_DOWN_TIME" "$MY_DATE_TIME" > "$MY_HOSTNAME_STATUS_HISTORY"
 		cat "$MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT" >> "$MY_HOSTNAME_STATUS_HISTORY"
 		rm "$MY_HOSTNAME_STATUS_HISTORY_TEMP_SORT" &> /dev/null
 	else
@@ -612,7 +607,7 @@ EOF
 function item_ok() {
 	echo '<li class="list-group-item d-flex justify-content-between align-items-center">'
 	if [[ -n "${MY_DISPLAY_TEXT}" ]]; then
-		echo "${MY_DISPLAY_TEXT}"
+		echo "<a target="_blank" href="$MY_OK_HOSTNAME">$MY_DISPLAY_TEXT </a>"
 	else
 		if [[ "$MY_OK_COMMAND" = "ping" ]]; then
 			echo "ping $MY_OK_HOSTNAME"
@@ -641,7 +636,7 @@ EOF
 function item_down() {
 	echo '<li class="list-group-item d-flex justify-content-between align-items-center">'
 	if [[ -n "${MY_DISPLAY_TEXT}" ]]; then
-		echo "${MY_DISPLAY_TEXT}"
+		echo "<a target="_blank" href="$MY_DOWN_HOSTNAME">$MY_DISPLAY_TEXT </a>"
 	else
 		if [[ "$MY_DOWN_COMMAND" = "ping" ]]; then
 			echo "ping $MY_DOWN_HOSTNAME"
@@ -798,7 +793,6 @@ fi
 #
 
 MY_HOSTNAME_COUNT=0
-#while IFS=';' read -r MY_COMMAND MY_HOSTNAME_STRING MY_PORT || [[ -n "$MY_COMMAND" ]]; do
 while IFS=';' read MY_COMMAND MY_HOSTNAME_STRING MY_PORT || [[ -n "$MY_COMMAND" ]]; do
 	MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
 	if [[ "$MY_COMMAND" = "ping" ]]; then

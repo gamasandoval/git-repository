@@ -13,3 +13,4 @@
 http://ansible-master:8080/index1.html;dwdashboard;CTS - Inf Services App Adm Team1
 http://ansible-master:8080/index2.html;eis;CTS - Inf Services App Adm Team1
 http://ansible-master:8080/index3.html;workflow;CTS - Inf Services App Adm Team1
+http://ansible-master:8080/index4.html;dwcontroller;CTS - Inf Services App Adm Team1

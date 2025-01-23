@@ -35,6 +35,9 @@ MY_HOSTNAME_LIST_GROUPS=${MY_HOSTNAME_LIST_GROUPS:-"$MY_STATUS_CONFIG_DIR/status
 #Staging endpoint points to SN Stage
 ENDPOINT=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/staging/ms-cts-snow-webhook
 APIKEY=uqY1mXU8cR3aFgXQYVGmgaJRwiNgEheMaXquuQSG
+#Default endpoint points to SN PROD#
+#endpoint=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/default/ms-cts-snow-webhook
+#apikey=trrEUTo7nt6mUmHoN0wpI6DDUgpehPLA5cEXrjjj
 PLATFORM="mscts"
 MY_DATE='date "+%Y-%m-%d %H:%M:%S"'
 INSTANCE="test"

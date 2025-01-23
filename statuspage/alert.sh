@@ -155,7 +155,11 @@ echo "INC$MY_RANDOM_INC"
 }
 
 function f_sn_ticket {
-MY_SN_URL="$1"
+#f_log ""
+#f_log "Function sn_ticket"
+
+MY_SN_STRING="$1" # remove alternative display textS
+MY_SN_URL="${MY_SN_STRING%%|*}"
 MY_SN_SEVERITY="$2"
 MY_SN_DOWNTIME="$3"
 MY_SN_HOST=$(echo $MY_SN_URL | cut -d'/' -f3 | cut -d':' -f1)
@@ -165,6 +169,8 @@ MY_SN_DATE=$(echo -e "$(eval "$MY_DATE")")
 MY_SN_SHORTDESCRIPTION="$CUSTOMER_SHORTNAME - $INSTANCE - URL down on host $MY_SN_HOST"
 MY_SN_DESCRIPTION="URL: $MY_SN_URL has been down for $MY_SN_DOWNTIME segs. Please review or take necessary actions."
 
+#f_log "MY_SN_STRING : $MY_SN_STRING"
+#f_log "MY_SN_URL : $MY_SN_URL"
 #f_log "APIKEY : $APIKEY"
 #f_log "PLATFORM : $PLATFORM"
 #f_log "MY_SN_APP : $MY_SN_APP"
@@ -234,6 +240,8 @@ function f_isticketopen() {
     	#f_log "ticket is empty"   
 		MY_INC="" 
 	fi
+	#f_log ""
+	#f_log "End of ticket open"
 }
 
 #
@@ -243,26 +251,26 @@ function f_read_errors() {
 #f_log ""
 #f_log "Starting function f_read_errors"
 MY_HOSTNAME_COUNT=0
-while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME MY_DOWN_PORT MY_DOWN_TIME|| [[ -n "$MY_DOWN_COMMAND" ]]; do
-	MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
+while IFS=';' read -r MY_DOWN_COMMAND MY_DOWN_HOSTNAME_STRING MY_DOWN_PORT MY_DOWN_TIME|| [[ -n "$MY_DOWN_COMMAND" ]]; do
+	MY_DOWN_HOSTNAME="${MY_DOWN_HOSTNAME_STRING%%|*}" # remove alternative display textS
     if [[ "$MY_DOWN_COMMAND" = "http-status" ]]; then
 		(( MY_HOSTNAME_COUNT++))
 		#f_log ""
 		#f_log "Line: $MY_HOSTNAME_COUNT "
 		# Check status change
-		f_log "ERROR Line: $MY_DOWN_COMMAND $MY_DOWN_HOSTNAME $MY_DOWN_PORT $MY_DOWN_TIME "
-		f_isticketopen "$MY_DOWN_HOSTNAME"
+		f_log "ERROR Line: $MY_DOWN_COMMAND $MY_DOWN_HOSTNAME_STRING $MY_DOWN_PORT $MY_DOWN_TIME "
+		f_isticketopen "$MY_DOWN_HOSTNAME_STRING"
 
 			if [[ $MY_DOWN_TIME -gt $MY_ALERT_SEC && -z $MY_INC ]]; then #50000 & ticket empty
 			    f_log "$MY_DOWN_HOSTNAME current downtime: $MY_DOWN_TIME and MY_ALERT_SEC $MY_ALERT_SEC creating ticket ..."
 				MY_INC=$(f_sn_ticket "$MY_DOWN_HOSTNAME" "critical" "$MY_DOWN_TIME")
 				f_log "New incident created: $MY_INC "
-				f_save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
+				f_save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME_STRING" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
 				else
 					if [[ $MY_DOWN_TIME -lt $MY_ALERT_SEC  ]]; then
 			    	f_log "$MY_URL has been down less than $MY_ALERT_SEC current downtime: $MY_DOWN_TIME"     
 						elif [[ -n "$MY_INC" ]]; then
-						f_save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
+						f_save_incidents "$MY_DOWN_COMMAND" "$MY_DOWN_HOSTNAME_STRING" "$MY_DOWN_PORT" "$MY_DOWN_TIME" "$MY_INC" 
 					fi
 							
 			fi	
@@ -274,20 +282,20 @@ function f_read_ok() {
 #f_log ""	
 #f_log "Starting function f_read_ok"
 MY_HOSTNAME_COUNT=0
-while IFS=';' read -r MY_OK_COMMAND MY_OK_HOSTNAME MY_OK_PORT|| [[ -n "$MY_OK_COMMAND" ]]; do
-	#MY_HOSTNAME="${MY_HOSTNAME_STRING%%|*}" # remove alternative display textS
+while IFS=';' read -r MY_OK_COMMAND MY_OK_HOSTNAME_STRING MY_OK_PORT|| [[ -n "$MY_OK_COMMAND" ]]; do
+	MY_OK_HOSTNAME="${MY_OK_HOSTNAME_STRING%%|*}" # remove alternative display textS
     if [[ "$MY_OK_COMMAND" = "http-status" ]]; then
 		(( MY_HOSTNAME_COUNT++))
 		#f_log ""
 		#f_log "Line: $MY_HOSTNAME_COUNT "
-        f_log "OK Line: $MY_OK_COMMAND $MY_OK_HOSTNAME $MY_OK_PORT "
-		f_isticketopen "$MY_OK_HOSTNAME"
+        f_log "OK Line: $MY_OK_COMMAND $MY_OK_HOSTNAME_STRING $MY_OK_PORT "
+		f_isticketopen "$MY_OK_HOSTNAME_STRING"
 			if [[ -z "$MY_INC" ]]; then #if ticket is empty
-			    f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME is up and no previous ticket"  
+			    f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME_STRING is up and no previous ticket"  
 				else
-            	f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME is up resolving ticket $MY_INC"
-				f_sn_ticket "$MY_OK_HOSTNAME" "clear" ""
-				f_save_incidents "$MY_OK_COMMAND" "$MY_OK_HOSTNAME" "$MY_OK_PORT" "" "" 
+            	f_log "MY_OK_HOSTNAME: $MY_OK_HOSTNAME_STRING is up resolving ticket $MY_INC"
+				f_sn_ticket "$MY_OK_HOSTNAME_STRING" "clear" ""
+				f_save_incidents "$MY_OK_COMMAND" "$MY_OK_HOSTNAME_STRING" "$MY_OK_PORT" "" "" 
 				
 			fi
 			
