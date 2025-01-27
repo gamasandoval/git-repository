@@ -154,6 +154,25 @@ MY_RANDOM_INC="$((RANDOM%1000))"
 echo "INC$MY_RANDOM_INC"
 }
 
+#Function for Sending mails
+function f_sendmail {
+BODY_MSG=$(cat "${MY_STATUS_HTML}")
+if [[ -n "$SEND_MAIL" ]]; then
+/usr/sbin/sendmail -a "$RECIPIENTS" <<EOF
+subject:$SUBJECT
+from:$FROM
+to:$RECIPIENTS
+Content-Type: text/html
+MIME-Version: 1.0
+
+$BODY_MSG
+
+EOF
+f_log "email sent from f_sendmail to $RECIPIENTS"	
+fi
+exit
+}
+
 function f_sn_ticket {
 #f_log ""
 #f_log "Function sn_ticket"
@@ -315,6 +334,9 @@ case "$1" in
 "debug")
 	ONLY_OUTPUT_DEBUG_VARIABLES="yes"
 	;;
+"sendmail")
+	SEND_MAIL="yes"
+	;;
 "h" | "help" | "-h" | "-help" | "-?" | *)
 	usage 0
 	;;
@@ -332,6 +354,7 @@ check_file "$MY_HOSTNAME_STATUS_INC"
 check_file "$MY_HOSTNAME_STATUS_INC_TMP"
 check_config "$MY_HOSTNAME_LIST_GROUPS"
 f_copyincfile
+f_sendmail
 f_read_errors
 f_read_ok
 f_log ""

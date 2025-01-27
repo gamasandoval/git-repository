@@ -19,8 +19,6 @@ RED='\033[0;31m'
 CLEAR='\033[0m'
 
 
-
-
 # Send notification if downtime is greater than
 MY_ALERT_SEC=${MY_ALERT_SEC:-"5"} # 5 Segs
 
@@ -31,7 +29,12 @@ MY_HOSTNAME_STATUS_INC=${MY_HOSTNAME_STATUS_INC:-"$MY_STATUS_CONFIG_DIR/status_h
 MY_HOSTNAME_STATUS_INC_TMP=${MY_HOSTNAME_STATUS_INC_TMP:-"$MY_STATUS_CONFIG_DIR/status_hostname_down_inc_tmp.txt"}
 MY_HOSTNAME_LIST_GROUPS=${MY_HOSTNAME_LIST_GROUPS:-"$MY_STATUS_CONFIG_DIR/status_hostname_list_servicenow_ag.txt"}
 
-# Variables used by API
+#Sendmail Variables
+SUBJECT="STATUS: $CUSTOMER - $ENVIRONMENT Status Page"
+RECIPIENTS="gamaliel.sandoval@ellucian.com"
+FROM="ellucianstatuspage@PRCCStatusPage.com"
+
+# API Variables
 #Staging endpoint points to SN Stage
 ENDPOINT=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/staging/ms-cts-snow-webhook
 APIKEY=uqY1mXU8cR3aFgXQYVGmgaJRwiNgEheMaXquuQSG
@@ -46,6 +49,7 @@ CUSTOMER_SHORTNAME="ellucian"
 ENVIRONMENT="nonprod"
 PRIORITY="3"
 ASSIGNMENT_GROUP="CTS - Inf Services App Adm Team1"
+
 
 ################################################################################
 #### END Configuration Section

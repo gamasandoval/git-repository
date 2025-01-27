@@ -79,7 +79,7 @@ MY_STATUS_STYLESHEET=${MY_STATUS_STYLESHEET:-"https://cdnjs.cloudflare.com/ajax/
 MY_STATUS_FONTAWESOME=${MY_STATUS_FONTAWESOME:-"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"}
 
 # A footer
-MY_STATUS_FOOTER=${MY_STATUS_FOOTER:-'Powered by Ellucian EMS Static Monitoring'}
+MY_STATUS_FOOTER=${MY_STATUS_FOOTER:-'Powered by Ellucian Managed Services'}
 
 # LOUD Colors
 MY_GREEN='\033[0;32m'
