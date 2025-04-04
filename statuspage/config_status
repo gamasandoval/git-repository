@@ -3,7 +3,7 @@
 ################################################################################
 
 # Title for the status page
-MY_STATUS_TITLE="Ellucian Status Page"
+MY_STATUS_TITLE="CUSTOMER NonProd - Status Page"
 
 # Link for the homepage button
 #MY_HOMEPAGE_URL="https://github.com/Cyclenerd/static_status"
@@ -26,7 +26,7 @@ MY_HOSTNAME_FILE="$MY_STATUS_CONFIG_DIR/status_hostname_list.txt"
 MY_ALERT_SCRIPT="$MY_STATUS_CONFIG_DIR/alert.sh"
 
 # Tomcat webapps folder
-MY_TOMCAT_HOME="/u01/app/appserver/tomcat/apache-tomcat-9.0.76/webapps/ROOT"
+MY_TOMCAT_HOME="/u01/app/tomcat/webapps/ROOT"
 
 # Where should the HTML status page be stored?
 MY_STATUS_HTML="$MY_TOMCAT_HOME/index.html"

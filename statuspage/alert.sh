@@ -89,8 +89,11 @@ debug_variables() {
 	echo "MY_HOSTNAME_STATUS_DOWN: $MY_HOSTNAME_STATUS_DOWN"
 	echo "MY_HOSTNAME_STATUS_INC: $MY_HOSTNAME_STATUS_INC"
 	echo "MY_HOSTNAME_STATUS_INC_TMP: $MY_HOSTNAME_STATUS_INC_TMP"
+	echo "SUBJECT: $SUBJECT"
+	echo "RECIPIENTS: $RECIPIENTS"
+	echo "FROM: $FROM"
 	echo "MY_ALERT_SEC: $MY_ALERT_SEC"
-	
+
 }	
 
 #Fuction for logging pusposes, it receives script name and text to log
@@ -157,8 +160,13 @@ echo "INC$MY_RANDOM_INC"
 #Function for Sending mails
 function f_sendmail {
 BODY_MSG=$(cat "${MY_STATUS_HTML}")
+#f_log "BODY: $BODY_MSG"
+#f_log "SUBJECT: $SUBJECT"
+#f_log "RECIPIENTS: $RECIPIENTS"
+#f_log "FROM: $FROM"
+
 if [[ -n "$SEND_MAIL" ]]; then
-/usr/sbin/sendmail -a "$RECIPIENTS" <<EOF
+sendmail "$RECIPIENTS" <<EOF
 subject:$SUBJECT
 from:$FROM
 to:$RECIPIENTS
@@ -168,9 +176,11 @@ MIME-Version: 1.0
 $BODY_MSG
 
 EOF
+
 f_log "email sent from f_sendmail to $RECIPIENTS"	
-fi
 exit
+fi
+
 }
 
 function f_sn_ticket {
@@ -358,6 +368,7 @@ f_sendmail
 f_read_errors
 f_read_ok
 f_log ""
+f_log "MY OUTAGE: $MY_OUTAGE_COUNT"
 f_log "END of script"
 
 

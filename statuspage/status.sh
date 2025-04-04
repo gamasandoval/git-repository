@@ -545,10 +545,9 @@ function page_footer() {
 	cat >> "$MY_STATUS_HTML" << EOF
 <hr class="mt-4">
 <footer>
-	<p class="logo" href="http://www.ellucian.com" target="_blank">
-    <img src="https://www.ellucian.com/themes/custom/elluciantheme/logo.svg" alt="Acme API Co. Logo"></p>
+	<a href="http://www.ellucian.com" target="_blank"><img src="https://www.ellucian.com/themes/custom/elluciantheme/logo.svg" alt="Acme API Co. Logo"></a>
 	<p>$MY_STATUS_FOOTER</p>
-	<p class="text-muted">$MY_DATE_TIME</p>
+	<p class="text-muted">Last status update: $MY_DATE_TIME</p>
 </footer>
 </div>
 </body>
@@ -728,7 +727,6 @@ check_bash
 # Commands we need
 MY_COMMANDS=(
 	ping
-	ping6
 	nc
 	curl
 	grep

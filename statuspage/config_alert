@@ -10,9 +10,6 @@ MY_CHECK=${MY_CHECK:-"http-status"}
 #   status_hostname_down.txt:
 #       http-status;http://ansible-master:8080/index1.html;200;75
 
-#Added INC to simulate SN creation
-#MY_INC="INC1234"
-
 # Notification colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -20,7 +17,7 @@ CLEAR='\033[0m'
 
 
 # Send notification if downtime is greater than
-MY_ALERT_SEC=${MY_ALERT_SEC:-"5"} # 5 Segs
+MY_ALERT_SEC=${MY_ALERT_SEC:-"10"} # 10 Segs
 
 # Location for the downtime status file
 #MY_STATUS_CONFIG_DIR="/u01/app/staticmonitor"
@@ -30,17 +27,17 @@ MY_HOSTNAME_STATUS_INC_TMP=${MY_HOSTNAME_STATUS_INC_TMP:-"$MY_STATUS_CONFIG_DIR/
 MY_HOSTNAME_LIST_GROUPS=${MY_HOSTNAME_LIST_GROUPS:-"$MY_STATUS_CONFIG_DIR/status_hostname_list_servicenow_ag.txt"}
 
 #Sendmail Variables
-SUBJECT="STATUS: $CUSTOMER - $ENVIRONMENT Status Page"
-RECIPIENTS="gamaliel.sandoval@ellucian.com"
-FROM="ellucianstatuspage@PRCCStatusPage.com"
+#SUBJECT="STATUS: PRCC NonProd Status Page"
+#RECIPIENTS="gamaliel.sandoval@ellucian.com"
+#FROM="ellucianstatuspage@ellucian.com"
 
 # API Variables
 #Staging endpoint points to SN Stage
 ENDPOINT=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/staging/ms-cts-snow-webhook
 APIKEY=uqY1mXU8cR3aFgXQYVGmgaJRwiNgEheMaXquuQSG
 #Default endpoint points to SN PROD#
-#endpoint=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/default/ms-cts-snow-webhook
-#apikey=trrEUTo7nt6mUmHoN0wpI6DDUgpehPLA5cEXrjjj
+#ENDPOINT=https://tszf71qsl2.execute-api.us-east-1.amazonaws.com/default/ms-cts-snow-webhook
+#APIKEY=trrEUTo7nt6mUmHoN0wpI6DDUgpehPLA5cEXrjjj
 PLATFORM="mscts"
 MY_DATE='date "+%Y-%m-%d %H:%M:%S"'
 INSTANCE="test"
@@ -48,7 +45,7 @@ CUSTOMER="Ellucian"
 CUSTOMER_SHORTNAME="ellucian"
 ENVIRONMENT="nonprod"
 PRIORITY="3"
-ASSIGNMENT_GROUP="CTS - Inf Services App Adm Team1"
+#ASSIGNMENT_GROUP="CTS - Inf Services App Adm Team1"
 
 
 ################################################################################
