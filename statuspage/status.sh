@@ -545,7 +545,7 @@ function page_footer() {
 	cat >> "$MY_STATUS_HTML" << EOF
 <hr class="mt-4">
 <footer>
-	<a href="http://www.ellucian.com" target="_blank"><img src="https://www.ellucian.com/themes/custom/elluciantheme/logo.svg" alt="Acme API Co. Logo"></a>
+	<a href="http://www.ellucian.com" target="_blank"><img src="https://www.ellucian.com/themes/custom/elluciantheme/logo.svg" role="image" width="123" height="30" alt="Acme API Co. Logo"></a>
 	<p>$MY_STATUS_FOOTER</p>
 	<p class="text-muted">Last status update: $MY_DATE_TIME</p>
 </footer>
