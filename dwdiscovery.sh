@@ -378,8 +378,67 @@ check_httpd_processes() {
     fi
 }
 
+# Name:        check_dw_base_commands
+# Description: Runs DW base commands (webshow, dapshow, tbeshow, preqshow, resshow)
+#              Prints output to general log. Summary only shows running/not running.
+#---------------------------------------------------
+check_dw_base_commands() {
+    f_log "---------------------------------------------"
+    f_log "Checking DW base commands as $DEGREEWORKSUSER..."
+
+    # Only run on Classic or Hybrid servers
+    if [[ "$SERVER_TYPE" != "Classic" && "$SERVER_TYPE" != "Hybrid" ]]; then
+        f_log "Skipping DW base command checks for $SERVER_TYPE server" yellow
+        return
+    fi
+
+    # List of DW commands to run
+    DW_COMMANDS=(webshow dapshow tbeshow preqshow resshow)
+
+    # Declare associative array to track command status
+    declare -gA DW_COMMAND_STATUS
+
+    for cmd in "${DW_COMMANDS[@]}"; do
+        f_log "Running command: $cmd..."
+        CMD_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "$cmd" 2>&1)
+
+        if [[ -n "$CMD_OUTPUT" ]]; then
+            # Check if command not found
+            if echo "$CMD_OUTPUT" | grep -qi "not found"; then
+                DW_COMMAND_STATUS["$cmd"]="Not found"
+                f_log "$cmd: not found" red
+                continue
+            fi
+
+            # Special handling for preqshow
+            if [[ "$cmd" == "preqshow" ]]; then
+                # Sum all numeric values in output
+                SUM=$(echo "$CMD_OUTPUT" | grep -oE '[0-9]+' | paste -sd+ - | bc)
+                if [[ "$SUM" -eq 0 ]]; then
+                    DW_COMMAND_STATUS["$cmd"]="Not used"
+                    f_log "$cmd: all queues are empty → Not used" yellow
+                else
+                    DW_COMMAND_STATUS["$cmd"]="Running"
+                    f_log "Output from $cmd:" green
+                    echo "$CMD_OUTPUT"
+                fi
+            else
+                DW_COMMAND_STATUS["$cmd"]="Running"
+                f_log "Output from $cmd:" green
+                echo "$CMD_OUTPUT"
+            fi
+        else
+            DW_COMMAND_STATUS["$cmd"]="Not running"
+            f_log "No output from $cmd" yellow
+        fi
+    done
+}
+
+
 print_summary() {
     echo -e "\n==================== SUMMARY ===================="
+
+    # Server type color
     case "$SERVER_TYPE" in
         Classic) ST_COLOR="$GREEN" ;;
         Web)     ST_COLOR="$YELLOW" ;;
@@ -390,6 +449,7 @@ print_summary() {
     printf "%-25s : %s\n" "DegreeWorks Version" "${DWVERSION:-Not set}"
     printf "%-25s : %s\n" "DGWBASE" "${DGWBASE:-Not set}"
 
+    # Classic or Hybrid details
     if [[ "$SERVER_TYPE" == "Classic" || "$SERVER_TYPE" == "Hybrid" ]]; then
         if systemctl is-active --quiet rabbitmq-server; then RABBIT_COLOR="$GREEN"; else RABBIT_COLOR="$RED"; fi
         printf "%-25s : %b%s%b\n" "RabbitMQ Status" "$RABBIT_COLOR" "$(systemctl is-active rabbitmq-server 2>/dev/null)" "$CLEAR"
@@ -404,15 +464,32 @@ print_summary() {
         [[ "$CRON_COUNT" -eq 0 ]] && CRON_COLOR="$YELLOW"
         printf "%-25s : %b%d job(s)%b\n" "Cron Jobs Count" "$CRON_COLOR" "$CRON_COUNT" "$CLEAR"
 
-        if [[ "$SKIP_SQL" == false ]]; then
-            BLOB_COLOR="$YELLOW"
-            [[ "$COUNT_NON_BLOB" -eq 0 ]] && BLOB_COLOR="$GREEN"
-            printf "%-25s : %bNon-BLOB: %s, BLOB: %s%b\n" "BLOB Conversion" "$BLOB_COLOR" "$COUNT_NON_BLOB" "$COUNT_BLOB" "$CLEAR"
+        BLOB_COLOR="$YELLOW"
+        [[ "$COUNT_NON_BLOB" -eq 0 ]] && BLOB_COLOR="$GREEN"
+        if [[ "$NOSQL_FLAG" == "yes" ]]; then
+            printf "%-25s : %s\n" "SQL checks" "skipped (--nosql)"
         else
-            printf "%-25s : %s\n" "SQL checks" "were skipped (--nosql)"
+            printf "%-25s : %bNon-BLOB: %s, BLOB: %s%b\n" "BLOB Conversion" "$BLOB_COLOR" "$COUNT_NON_BLOB" "$COUNT_BLOB" "$CLEAR"
+        fi
+
+        # DW Base Commands summary
+        if [[ -n "${DW_COMMAND_STATUS[@]}" ]]; then
+            printf "%-25s : %s\n" "DW Base Commands" ""
+            for cmd in "${!DW_COMMAND_STATUS[@]}"; do
+                STATUS="${DW_COMMAND_STATUS[$cmd]}"
+                case "$STATUS" in
+                    "Running") COLOR="$GREEN" ;;
+                    "Not used") COLOR="$YELLOW" ;;
+                    "Not running") COLOR="$YELLOW" ;;
+                    "Not found") COLOR="$RED" ;;
+                    *) COLOR="$CLEAR" ;;
+                esac
+                printf "  %-23s : %b%s%b\n" "$cmd" "$COLOR" "$STATUS" "$CLEAR"
+            done
         fi
     fi
 
+    # Web or Hybrid details
     if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
         HTTPD_COUNT=$(echo "$HTTPD_PROCS" | grep -v '^$' | wc -l)
         if [[ "$HTTPD_COUNT" -gt 0 ]]; then
@@ -449,8 +526,8 @@ main() {
         check_perl
         check_dw_db
         check_db_version
-
-        list_cronjobs
+        list_cronjobs   
+        check_dw_base_commands
 
         if [[ "$SKIP_SQL" == false ]]; then
             check_blob_conversion
