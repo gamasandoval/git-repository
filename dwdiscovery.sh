@@ -2,10 +2,10 @@
 #########################################################################
 # Name:          dwdiscovery.sh
 # Description:   Check prechecks and gather of DW variables
-# Args:          degreeworksuser
+# Args:          degreeworksuser [--nosql]
 # Author:        G. Sandoval
 # Date:          10.07.2025
-# Version:       1.11
+# Version:       1.12
 #########################################################################
 
 ####### VARIABLES SECTION #######
@@ -26,6 +26,7 @@ HTTPD_PROCS=""
 COUNT_NON_BLOB=""
 COUNT_BLOB=""
 DW_JARS=""
+SKIP_SQL=false
 
 ####### FUNCTIONS SECTION #######
 f_log() {
@@ -53,11 +54,15 @@ check_root() {
 
 check_args() {
     if [[ $# -lt 1 ]]; then
-        f_log "Usage: $0 degreeworksuser" red
+        f_log "Usage: $0 degreeworksuser [--nosql]" red
         exit 1
     fi
 
     DEGREEWORKSUSER="$1"
+
+    if [[ "$2" == "--nosql" ]]; then
+        SKIP_SQL=true
+    fi
 
     if id "$DEGREEWORKSUSER" &>/dev/null; then
         f_log "User $DEGREEWORKSUSER exists" green
@@ -257,11 +262,8 @@ check_db_version() {
     f_log "Checking DW database version..."
 
     TMP_DB_FILE="/tmp/OracleDB_$$.txt"
-
     f_log "Running database command with nohup..."
     nohup su - "$DEGREEWORKSUSER" -c "db > $TMP_DB_FILE 2>&1" >/dev/null 2>&1 &
-
-    # Wait a few seconds for the command to start and write output
     sleep 3
 
     if [[ -f "$TMP_DB_FILE" ]]; then
@@ -275,7 +277,6 @@ check_db_version() {
         f_log "Database output file $TMP_DB_FILE not found" red
     fi
 }
-
 
 check_blob_conversion() {
     f_log "---------------------------------------------"
@@ -317,18 +318,17 @@ check_duplicate_notes() {
     echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:'
 }
 
-
 list_dw_jar_files() {
     f_log "---------------------------------------------"
     f_log "Listing DW-related Java JAR files for $SERVER_TYPE server..."
-    
+
     if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
         f_log "Skipping DW JAR file listing for Classic server" yellow
         return
     fi
 
     DW_JARS=$(ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -iE "Responsive|Dashboard|Controller|API|Transit" | grep -iv "jenkins")
-    
+
     if [[ -n "$DW_JARS" ]]; then
         f_log "Found DW Java JAR processes:" green
         echo "$DW_JARS"
@@ -404,9 +404,13 @@ print_summary() {
         [[ "$CRON_COUNT" -eq 0 ]] && CRON_COLOR="$YELLOW"
         printf "%-25s : %b%d job(s)%b\n" "Cron Jobs Count" "$CRON_COLOR" "$CRON_COUNT" "$CLEAR"
 
-        BLOB_COLOR="$YELLOW"
-        [[ "$COUNT_NON_BLOB" -eq 0 ]] && BLOB_COLOR="$GREEN"
-        printf "%-25s : %bNon-BLOB: %s, BLOB: %s%b\n" "BLOB Conversion" "$BLOB_COLOR" "$COUNT_NON_BLOB" "$COUNT_BLOB" "$CLEAR"
+        if [[ "$SKIP_SQL" == false ]]; then
+            BLOB_COLOR="$YELLOW"
+            [[ "$COUNT_NON_BLOB" -eq 0 ]] && BLOB_COLOR="$GREEN"
+            printf "%-25s : %bNon-BLOB: %s, BLOB: %s%b\n" "BLOB Conversion" "$BLOB_COLOR" "$COUNT_NON_BLOB" "$COUNT_BLOB" "$CLEAR"
+        else
+            printf "%-25s : %s\n" "SQL checks" "were skipped (--nosql)"
+        fi
     fi
 
     if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
@@ -445,17 +449,22 @@ main() {
         check_perl
         check_dw_db
         check_db_version
+
         list_cronjobs
-        check_blob_conversion
-        check_duplicate_exceptions
-        check_duplicate_notes
+
+        if [[ "$SKIP_SQL" == false ]]; then
+            check_blob_conversion
+            check_duplicate_exceptions
+            check_duplicate_notes
+        else
+            f_log "SQL checks were skipped (--nosql)" yellow
+        fi
     fi
 
     if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
         list_dw_jar_files
         get_dw_jar_versions
         check_httpd_processes
-        
     fi
 
     print_summary
