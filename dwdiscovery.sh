@@ -1,11 +1,11 @@
 #!/bin/bash
 #########################################################################
 # Name:          dwdiscovery.sh
-# Description:   Check prechecks and gather of DW variables
+# Description:   Check prechecks and gather DW variables
 # Args:          degreeworksuser
 # Author:        G. Sandoval
-# Date:          10.06.2025
-# Version:       1.8
+# Date:          10.07.2025
+# Version:       1.9
 #########################################################################
 
 ####### VARIABLES SECTION #######
@@ -18,13 +18,15 @@ GREEN="\e[32m"
 YELLOW="\e[33m"
 CLEAR="\e[0m"
 
+# Server type
+SERVER_TYPE="Unknown"
+
 ####### FUNCTIONS SECTION #######
 f_log() {
     local msg="$1"
     local color="${2:-}"
     local timestamp
     timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-
     case "$color" in
         green)  echo -e "$timestamp: ${GREEN}${msg}${CLEAR}" ;;
         red)    echo -e "$timestamp: ${RED}${msg}${CLEAR}" ;;
@@ -33,7 +35,7 @@ f_log() {
     esac
 }
 
-# Check if running as root
+# Check root user
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         f_log "This script must be run as root. Current user: $(whoami)" red
@@ -60,7 +62,7 @@ check_args() {
     fi
 }
 
-# OS Information
+# OS Info
 check_os() {
     f_log "Gathering OS information..."
     f_log "Hostname: $(hostname)"
@@ -70,7 +72,7 @@ check_os() {
     f_log "Uptime: $(uptime -p)"
 }
 
-# Filesystem Type Information (local vs shared)
+# Filesystem Info
 check_filesystems() {
     f_log "Gathering filesystem information..."
     df -hT | while read -r fs type size used avail pcent mount; do
@@ -78,10 +80,10 @@ check_filesystems() {
     done
 }
 
-# Filesystem Usage (threshold check)
+# Filesystem usage
 check_fs_usage() {
     f_log "Checking filesystem usage..."
-    local threshold=80
+    local threshold=$THRESHOLD
     df -h --output=source,pcent,size,used,avail,target | tail -n +2 | while read -r fs pcent size used avail mount; do
         usage=${pcent%%%}  # strip %
         if (( usage > threshold )); then
@@ -92,21 +94,19 @@ check_fs_usage() {
     done
 }
 
-# Wrapper: Run all storage-related checks
+# Wrapper: storage checks
 check_storage() {
     check_filesystems
     check_fs_usage
 }
 
 ###############################################
-# DEGREEWORKS-SPECIFIC CHECKS
+# DEGREEWORKS CHECKS
 ###############################################
 
-# Check DegreeWorks version via $DWRELEASE
 check_dw_version() {
     f_log "Checking DegreeWorks version..."
     DWVERSION=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo \$DWRELEASE"' 2>/dev/null | tail -n1)
-
     if [[ -n "$DWVERSION" ]]; then
         f_log "DegreeWorks version: $DWVERSION" green
     else
@@ -114,7 +114,6 @@ check_dw_version() {
     fi
 }
 
-# Check DGWBASE variable
 check_dgwbase() {
     f_log "Checking DGWBASE variable..."
     DGWBASE=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo \$DGWBASE"' 2>/dev/null | tail -n1)
@@ -125,22 +124,32 @@ check_dgwbase() {
     fi
 }
 
-# Detect server type: Classic vs Web
+# Detect server type
 check_server_type() {
-    f_log "Detecting server type (Classic vs Web)..."
-    f_log "DWVERSION as: '$DWVERSION'"
-    f_log "DGWBASE as: '$DGWBASE'"
+    f_log "Detecting server type (Classic vs Web vs Hybrid)..."
+    f_log "DWVERSION='$DWVERSION'"
+    f_log "DGWBASE='$DGWBASE'"
 
-    if [[ -n "$DWVERSION" && -n "$DGWBASE" ]]; then
+    # Count relevant Java jar processes for DW
+    JAVA_PROCS=$(ps -u "$DEGREEWORKSUSER" -o comm,args | grep -iE 'Responsive|Dashboard|Controller|API|Transit' | grep -vi 'jenkins' | grep '\.jar' | grep -vi 'transitexecutor.jar' | wc -l)
+    f_log "Relevant Java jar processes count: $JAVA_PROCS"
+
+    if [[ -n "$DWVERSION" && -n "$DGWBASE" && $JAVA_PROCS -ge 1 ]]; then
+        SERVER_TYPE="Hybrid"
+        f_log "Decision: DW variables + Java jars → Hybrid server" green
+    elif [[ -n "$DWVERSION" && -n "$DGWBASE" ]]; then
         SERVER_TYPE="Classic"
-        f_log "Decision: DWVERSION and DGWBASE are set → Classic server" green
-    else
+        f_log "Decision: DW variables exist → Classic server" green
+    elif [[ $JAVA_PROCS -ge 2 ]]; then
         SERVER_TYPE="Web"
-        f_log "Decision: DWVERSION or DGWBASE not set → Web server" yellow
+        f_log "Decision: Java jar processes found → Web server" yellow
+    else
+        SERVER_TYPE="Unknown"
+        f_log "Server type could not be determined → Unknown" red
     fi
 }
 
-# Check if RabbitMQ service is running
+# Check RabbitMQ
 check_rabbitmq_status() {
     f_log "Checking RabbitMQ service status..."
     if systemctl is-active --quiet rabbitmq-server; then
@@ -150,22 +159,16 @@ check_rabbitmq_status() {
     fi
 }
 
-# Get RabbitMQ server version
 check_rabbitmq_server_version() {
     f_log "Getting RabbitMQ server version..."
     if command -v rabbitmqctl &>/dev/null; then
         RABBIT_VERSION=$(rabbitmqctl version 2>/dev/null)
-        if [[ -n "$RABBIT_VERSION" ]]; then
-            f_log "RabbitMQ server version: $RABBIT_VERSION" green
-        else
-            f_log "Could not detect RabbitMQ server version" red
-        fi
+        f_log "RabbitMQ server version: ${RABBIT_VERSION:-Unknown}" green
     else
         f_log "rabbitmqctl command not found" red
     fi
 }
 
-# List RabbitMQ client versions installed under /opt
 check_rabbitmq_client_versions() {
     f_log "Checking RabbitMQ client installations under /opt..."
     if [[ -d /opt ]]; then
@@ -184,212 +187,120 @@ check_rabbitmq_client_versions() {
     fi
 }
 
-# Check Java version
 check_java_version() {
     f_log "Checking Java version as $DEGREEWORKSUSER..."
-    JAVA_VER=$(su - "$DEGREEWORKSUSER" -c "java -version" 2>&1 | head -n 1)
-    if [[ -n "$JAVA_VER" ]]; then
-        f_log "Java version detected: $JAVA_VER" green
-    else
-        f_log "Java is not installed or not in PATH for $DEGREEWORKSUSER" red
-    fi
+    JAVA_VER=$(su - "$DEGREEWORKSUSER" -c "java -version" 2>&1 | head -n1)
+    f_log "Java version detected: ${JAVA_VER:-Not installed}" green
 }
 
-# Check Apache FOP installation and version
 check_apache_fop() {
     f_log "Checking Apache FOP..."
     FOP_PATH=$(su - "$DEGREEWORKSUSER" -c 'which fop' 2>/dev/null)
-    if [[ -n "$FOP_PATH" ]]; then
-        f_log "Apache FOP found: $FOP_PATH" green
-    else
-        f_log "Apache FOP not found for user $DEGREEWORKSUSER" red
-    fi
+    f_log "Apache FOP path: ${FOP_PATH:-Not found}" green
 }
 
-# Check GCC version
 check_gcc() {
     f_log "Checking GCC version..."
     if command -v gcc &>/dev/null; then
         GCC_VER=$(gcc -v 2>&1 | grep "gcc version" | head -n 1)
-        if [[ -n "$GCC_VER" ]]; then
-            f_log "GCC version detected: $GCC_VER" green
-        else
-            f_log "Could not detect GCC version" red
-        fi
+        f_log "GCC version detected: ${GCC_VER:-Unknown}" green
     else
-        f_log "GCC is not installed or not in PATH" red
+        f_log "GCC not installed" red
     fi
 }
 
-# Check OpenSSL version
 check_openssl() {
     f_log "Checking OpenSSL version..."
-    if command -v openssl &>/dev/null; then
-        OPENSSL_VER=$(openssl version 2>/dev/null)
-        if [[ -n "$OPENSSL_VER" ]]; then
-            f_log "OpenSSL version detected: $OPENSSL_VER" green
-        else
-            f_log "Could not detect OpenSSL version" red
-        fi
-    else
-        f_log "OpenSSL is not installed or not in PATH" red
-    fi
+    OPENSSL_VER=$(openssl version 2>/dev/null)
+    f_log "OpenSSL version detected: ${OPENSSL_VER:-Unknown}" green
 }
 
-# Check Perl version
 check_perl() {
     f_log "Checking Perl version..."
-    if command -v perl &>/dev/null; then
-        PERL_VER=$(perl -e 'printf "%vd\n", $^V' 2>/dev/null)
-        if [[ -n "$PERL_VER" ]]; then
-            f_log "Perl version detected: $PERL_VER" green
-        else
-            f_log "Could not detect Perl version" red
-        fi
-    else
-        f_log "Perl is not installed or not in PATH" red
-    fi
+    PERL_VER=$(perl -e 'printf "%vd\n", $^V' 2>/dev/null)
+    f_log "Perl version detected: ${PERL_VER:-Unknown}" green
 }
 
-# Check DW database connection with jdbcverify
 check_dw_db() {
     f_log "Checking DW database connection with jdbcverify..."
     DB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c 'jdbcverify --verbose' 2>&1)
     DB_EXIT=$?
     if [[ $DB_EXIT -eq 0 ]]; then
-        f_log "Database connection is OK. Output:" green
+        f_log "Database connection OK" green
         echo "$DB_OUTPUT"
     else
-        f_log "Database connection failed. Output:" red
+        f_log "Database connection failed" red
         echo "$DB_OUTPUT"
-        f_log "DW database connection is not good" red
     fi
 }
 
-# Check BLOB conversion requirement
 check_blob_conversion() {
     f_log "Checking BLOB conversion requirement..."
-    if [[ -z "$DWVERSION" ]]; then
-        f_log "DWVERSION is not set. Skipping BLOB conversion check." red
-        return
-    fi
-
     SQL_NON_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO!='BLOB';"
     SQL_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO='BLOB';"
-
-    f_log "DW_AUDIT_BLOB: $DW_AUDIT_BLOB"
-
     NON_BLOB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_NON_BLOB\"" 2>&1)
-    if echo "$NON_BLOB_OUTPUT" | grep -q "Cannot open select"; then
-        f_log "Could not run SQL automatically. Please run manually as $DEGREEWORKSUSER:" red
-        f_log "$SQL_NON_BLOB" red
-        return
-    fi
-    COUNT_NON_BLOB=$(echo "$NON_BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n 1)
-
+    COUNT_NON_BLOB=$(echo "$NON_BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n1)
     BLOB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_BLOB\"" 2>&1)
-    if echo "$BLOB_OUTPUT" | grep -q "Cannot open select"; then
-        f_log "Could not run SQL automatically. Please run manually as $DEGREEWORKSUSER:" red
-        f_log "$SQL_BLOB" red
-        return
-    fi
-    COUNT_BLOB=$(echo "$BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n 1)
-
-    if [[ "$(printf '%s\n' "$DWVERSION" "5.1.5" | sort -V | head -n1)" == "$DWVERSION" ]]; then
-        f_log "Count of non-BLOB records: $COUNT_NON_BLOB → BLOB conversion is suggested" yellow
-    else
-        f_log "Count of non-BLOB records: $COUNT_NON_BLOB → BLOB conversion is mandatory" red
-    fi
-    f_log "Count of BLOB records: $COUNT_BLOB" green
+    COUNT_BLOB=$(echo "$BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n1)
+    f_log "Non-BLOB count: $COUNT_NON_BLOB, BLOB count: $COUNT_BLOB" green
 }
 
-# Check DAP_EXCEPT_DTL duplicates
 check_duplicate_exceptions() {
-    f_log "Checking for duplicate exceptions in DAP_EXCEPT_DTL..."
-
-    if [[ -z "$DWVERSION" ]]; then
-        f_log "DWVERSION is not set. Cannot apply version-specific duplicate exception check." yellow
-    fi
-
-    # Single-line SQL
-    SQL_QUERY="select dap_stu_id, dap_exc_num, count(*) cnt from dap_except_dtl group by dap_stu_id, dap_exc_num having count(*) > 1 order by 1, 2;"
-
-    # Run SQL as DW user
+    f_log "Checking duplicate exceptions..."
+    SQL_QUERY="select dap_stu_id, dap_exc_num, count(*) cnt from dap_except_dtl group by dap_stu_id, dap_exc_num having count(*) > 1 order by 1,2;"
     SQL_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_QUERY\"" 2>&1)
-
-    # Check for runsql failure
-    if echo "$SQL_OUTPUT" | grep -q "Cannot open select"; then
-        f_log "Could not run SQL automatically. Please run the following SQL manually as $DEGREEWORKSUSER:" red
-        f_log "$SQL_QUERY" red
-        return
-    fi
-
-    # Print SQL output for debugging
-    f_log "SQL output:\n$SQL_OUTPUT"
-
-    # Count only valid rows
     ROW_COUNT=$(echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | wc -l)
-
     if [[ $ROW_COUNT -gt 0 ]]; then
-        if [[ "$(printf '%s\n' "$DWVERSION" "5.1.4" | sort -V | head -n1)" == "$DWVERSION" ]]; then
-            f_log "Found $ROW_COUNT duplicate exception(s). Duplicates must be manually resolved before continuing with the update check with AL!" red
-        else
-            f_log "Found $ROW_COUNT duplicate exception(s) in DAP_EXCEPT_DTL." red
-            f_log "Please review dap_except_dtl for details." red
-        fi
+        f_log "Found $ROW_COUNT duplicate exception(s)" red
     else
-        f_log "No duplicate exceptions found in DAP_EXCEPT_DTL." green
+        f_log "No duplicate exceptions found" green
     fi
 }
-# Check DAP_NOTE_DTL duplicates
+
 check_duplicate_notes() {
-    f_log "Checking for duplicate notes in DAP_NOTE_DTL..."
-
-    if [[ -z "$DWVERSION" ]]; then
-        f_log "DWVERSION is not set. Cannot apply version-specific duplicate note check." yellow
-    fi
-
-    # Single-line SQL
-    SQL_QUERY="select dap_stu_id, dap_note_num, count(*) cnt from dap_note_dtl group by dap_stu_id, dap_note_num having count(*) > 1 order by 1, 2;"
-
-    # Run SQL as DW user
+    f_log "Checking duplicate notes..."
+    SQL_QUERY="select dap_stu_id, dap_note_num, count(*) cnt from dap_note_dtl group by dap_stu_id, dap_note_num having count(*) > 1 order by 1,2;"
     SQL_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_QUERY\"" 2>&1)
-
-    # Check for runsql failure
-    if echo "$SQL_OUTPUT" | grep -q "Cannot open select"; then
-        f_log "Could not run SQL automatically. Please run the following SQL manually as $DEGREEWORKSUSER:" red
-        f_log "$SQL_QUERY" red
-        return
-    fi
-
-    # Print SQL output for debugging
-    f_log "SQL output:\n$SQL_OUTPUT"
-
-    # Count only valid rows
     ROW_COUNT=$(echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | wc -l)
-
     if [[ $ROW_COUNT -gt 0 ]]; then
-        if [[ "$(printf '%s\n' "$DWVERSION" "5.1.4" | sort -V | head -n1)" == "$DWVERSION" ]]; then
-            f_log "Found $ROW_COUNT duplicate note(s). Duplicates must be manually resolved before continuing with the update check with AL!" red
-        else
-            f_log "Found $ROW_COUNT duplicate note(s) in DAP_NOTE_DTL." red
-            f_log "Please review dap_note_dtl for details." red
-        fi
+        f_log "Found $ROW_COUNT duplicate note(s)" red
     else
-        f_log "No duplicate notes found in DAP_NOTE_DTL." green
+        f_log "No duplicate notes found" green
     fi
 }
 
-# List Java processes (for Web server)
+# List Java processes
 list_java_processes() {
-    f_log "Listing Java processes on the server for any potential DW services..."
+    f_log "Listing Java processes for DW..."
     ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -v grep
+}
+
+# List cron jobs for DW user
+check_dw_cronjobs() {
+    f_log "Listing cron jobs for $DEGREEWORKSUSER..."
+    CRON_OUTPUT=$(crontab -u "$DEGREEWORKSUSER" -l 2>/dev/null)
+    if [[ -n "$CRON_OUTPUT" ]]; then
+        f_log "Cron jobs for $DEGREEWORKSUSER:" green
+        echo "$CRON_OUTPUT"
+    else
+        f_log "No cron jobs found for $DEGREEWORKSUSER" yellow
+    fi
+}
+
+
+# Check HTTPD/Apache for Web/Hybrid
+check_httpd_process() {
+    if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
+        f_log "Skipping Apache/httpd check — not a Web or Hybrid server." yellow
+        return
+    fi
+    f_log "Checking for Apache/httpd processes..."
+    ps aux | grep -iE 'httpd|apache' | grep -v grep || f_log "No httpd/apache processes found" green
 }
 
 ###############################################
 # MAIN EXECUTION
 ###############################################
-
 main() {
     f_log "---------------------------------------------"
     f_log "START - checking DegreeWorks Environment ..."
@@ -399,30 +310,53 @@ main() {
     check_os
     check_storage
 
-    # DW checks
+    # DW Checks
     check_dw_version
     check_dgwbase
     check_server_type
 
-    if [[ "$SERVER_TYPE" == "Classic" ]]; then
-        check_rabbitmq_status
-        check_rabbitmq_server_version
-        check_rabbitmq_client_versions
-        check_java_version
-        check_apache_fop
-        check_gcc
-        check_openssl
-        check_perl
-        check_dw_db
-        check_blob_conversion
-        check_duplicate_exceptions
-        check_duplicate_notes
-    elif [[ "$SERVER_TYPE" == "Web" ]]; then
-        list_java_processes
-    else
-        f_log "Unknown server type. Exiting..." red
-        exit 1
-    fi
+    case "$SERVER_TYPE" in
+        Classic)
+            check_rabbitmq_status
+            check_rabbitmq_server_version
+            check_rabbitmq_client_versions
+            check_java_version
+            check_apache_fop
+            check_gcc
+            check_openssl
+            check_perl
+            check_dw_db
+            check_dw_cronjobs
+            check_blob_conversion
+            check_duplicate_exceptions
+            check_duplicate_notes
+            ;;
+        Web)
+            list_java_processes
+            check_httpd_process
+            ;;
+        Hybrid)
+            check_rabbitmq_status
+            check_rabbitmq_server_version
+            check_rabbitmq_client_versions
+            check_java_version
+            check_apache_fop
+            check_gcc
+            check_openssl
+            check_perl
+            check_dw_db
+            check_dw_cronjobs
+            check_blob_conversion
+            check_duplicate_exceptions
+            check_duplicate_notes
+            list_java_processes
+            check_httpd_process
+            ;;
+        *)
+            f_log "Unknown server type. Exiting..." red
+            exit 1
+            ;;
+    esac
 
     f_log "---------------------------------------------"
     f_log "END - DegreeWorks Environment check complete."
