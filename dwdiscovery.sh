@@ -434,6 +434,32 @@ check_dw_base_commands() {
     done
 }
 
+rmqtest() {
+    f_log "---------------------------------------------"
+    f_log "Running rmqtest as $DEGREEWORKSUSER..."
+
+    # Run rmqtest as dwuser
+    RMQ_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "rmqtest" 2>&1)
+    RMQ_EXIT=$?
+
+    # Print full output to general log
+    if [[ -n "$RMQ_OUTPUT" ]]; then
+        f_log "Output from rmqtest:" green
+        echo "$RMQ_OUTPUT"
+    else
+        f_log "No output from rmqtest" yellow
+    fi
+
+    # Determine summary status
+    if echo "$RMQ_OUTPUT" | grep -q "Success - reached the end"; then
+        RMQTEST_STATUS="Success"
+    elif echo "$RMQ_OUTPUT" | grep -qi "not found"; then
+        RMQTEST_STATUS="Not found"
+    else
+        RMQTEST_STATUS="Failed"
+    fi
+}
+
 
 print_summary() {
     echo -e "\n==================== SUMMARY ===================="
@@ -489,6 +515,17 @@ print_summary() {
         fi
     fi
 
+    # RMQ test
+    if [[ -n "$RMQTEST_STATUS" ]]; then
+    case "$RMQTEST_STATUS" in
+        Success) COLOR="$GREEN" ;;
+        Failed)  COLOR="$RED" ;;
+        Not\ found) COLOR="$RED" ;;
+        *) COLOR="$CLEAR" ;;
+    esac
+    printf "%-25s : %b%s%b\n" "RMQ Test" "$COLOR" "$RMQTEST_STATUS" "$CLEAR"
+fi
+
     # Web or Hybrid details
     if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
         HTTPD_COUNT=$(echo "$HTTPD_PROCS" | grep -v '^$' | wc -l)
@@ -519,6 +556,7 @@ main() {
         check_rabbitmq_status
         check_rabbitmq_server_version
         check_rabbitmq_client_versions
+        rmqtest
         check_java_version
         check_apache_fop
         check_gcc
