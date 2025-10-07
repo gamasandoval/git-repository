@@ -5,7 +5,7 @@
 # Args:          degreeworksuser
 # Author:        G. Sandoval
 # Date:          10.07.2025
-# Version:       1.10
+# Version:       1.11
 #########################################################################
 
 ####### VARIABLES SECTION #######
@@ -25,6 +25,7 @@ SERVER_TYPE=""
 HTTPD_PROCS=""
 COUNT_NON_BLOB=""
 COUNT_BLOB=""
+DW_JARS=""
 
 ####### FUNCTIONS SECTION #######
 f_log() {
@@ -74,14 +75,11 @@ check_os() {
     f_log "Kernel: $(uname -r)"
     f_log "Architecture: $(uname -m)"
     f_log "Uptime: $(uptime -p)"
-
 }
 
 check_filesystems() {
     f_log "Gathering filesystem information..."
-    df -hT | while read -r fs type size used avail pcent mount; do
-        if [[ "$fs" == "Filesystem" ]]; then continue; fi
-    done
+    df -hT
 }
 
 check_fs_usage() {
@@ -254,6 +252,31 @@ check_dw_db() {
     fi
 }
 
+check_db_version() {
+    f_log "---------------------------------------------"
+    f_log "Checking DW database version..."
+
+    TMP_DB_FILE="/tmp/OracleDB_$$.txt"
+
+    f_log "Running database command with nohup..."
+    nohup su - "$DEGREEWORKSUSER" -c "db > $TMP_DB_FILE 2>&1" >/dev/null 2>&1 &
+
+    # Wait a few seconds for the command to start and write output
+    sleep 3
+
+    if [[ -f "$TMP_DB_FILE" ]]; then
+        DB_VERSION=$(egrep -i "version" "$TMP_DB_FILE" | head -n1)
+        if [[ -n "$DB_VERSION" ]]; then
+            f_log "Database version detected: $DB_VERSION" green
+        else
+            f_log "Could not detect database version in $TMP_DB_FILE" yellow
+        fi
+    else
+        f_log "Database output file $TMP_DB_FILE not found" red
+    fi
+}
+
+
 check_blob_conversion() {
     f_log "---------------------------------------------"
     f_log "Checking BLOB conversion requirement..."
@@ -265,28 +288,75 @@ check_blob_conversion() {
     SQL_NON_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO!='BLOB';"
     SQL_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO='BLOB';"
 
+    f_log "Executing SQL (Non-BLOB): $SQL_NON_BLOB"
     NON_BLOB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_NON_BLOB\"" 2>&1)
     COUNT_NON_BLOB=$(echo "$NON_BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n 1)
+    f_log "Non-BLOB count: $COUNT_NON_BLOB"
 
+    f_log "Executing SQL (BLOB): $SQL_BLOB"
     BLOB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_BLOB\"" 2>&1)
     COUNT_BLOB=$(echo "$BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n 1)
+    f_log "BLOB count: $COUNT_BLOB"
 }
 
 check_duplicate_exceptions() {
     f_log "---------------------------------------------"
     SQL_QUERY="select dap_stu_id, dap_exc_num, count(*) cnt from dap_except_dtl group by dap_stu_id, dap_exc_num having count(*) > 1 order by 1, 2;"
+    f_log "Executing SQL: $SQL_QUERY"
     SQL_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_QUERY\"" 2>&1)
+    f_log "Duplicate exceptions:"
+    echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:'
 }
 
 check_duplicate_notes() {
     f_log "---------------------------------------------"
     SQL_QUERY="select dap_stu_id, dap_note_num, count(*) cnt from dap_note_dtl group by dap_stu_id, dap_note_num having count(*) > 1 order by 1, 2;"
+    f_log "Executing SQL: $SQL_QUERY"
     SQL_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_QUERY\"" 2>&1)
+    f_log "Duplicate notes:"
+    echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:'
+}
+
+
+list_dw_jar_files() {
+    f_log "---------------------------------------------"
+    f_log "Listing DW-related Java JAR files for $SERVER_TYPE server..."
+    
+    if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
+        f_log "Skipping DW JAR file listing for Classic server" yellow
+        return
+    fi
+
+    DW_JARS=$(ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -iE "Responsive|Dashboard|Controller|API|Transit" | grep -iv "jenkins")
+    
+    if [[ -n "$DW_JARS" ]]; then
+        f_log "Found DW Java JAR processes:" green
+        echo "$DW_JARS"
+    else
+        f_log "No DW-related Java JAR processes found" yellow
+    fi
+}
+
+get_dw_jar_versions() {
+    f_log "---------------------------------------------"
+    f_log "Getting DW JAR versions..."
+
+    if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
+        f_log "Skipping DW JAR version check for Classic server" yellow
+        return
+    fi
+
+    for jar in $(echo "$DW_JARS" | awk '{for(i=8;i<=NF;i++) print $i}'); do
+        if [[ -f "$jar" ]]; then
+            JAR_VER=$(unzip -p "$jar" META-INF/MANIFEST.MF 2>/dev/null | grep -i "Implementation-Version" | head -n1)
+            f_log "JAR: $(basename "$jar") → Version: ${JAR_VER:-Not found}"
+        fi
+    done
 }
 
 list_java_processes() {
     f_log "---------------------------------------------"
-    f_log "Listing Java processes on the server for any potential DW services..."
+    f_log "Listing all Java processes..."
     ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -v grep
 }
 
@@ -360,7 +430,6 @@ main() {
     check_args "$@"
     check_os
     check_storage
-
     check_dw_version
     check_dgwbase
     check_server_type
@@ -375,6 +444,7 @@ main() {
         check_openssl
         check_perl
         check_dw_db
+        check_db_version
         list_cronjobs
         check_blob_conversion
         check_duplicate_exceptions
@@ -382,8 +452,10 @@ main() {
     fi
 
     if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
-        list_java_processes
+        list_dw_jar_files
+        get_dw_jar_versions
         check_httpd_processes
+        
     fi
 
     print_summary
