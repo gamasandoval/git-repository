@@ -428,63 +428,38 @@ check_httpd_processes() {
     fi
 }
 
-# --- BUILDALL PLACEHOLDER ---
+# --- BUILDALL Function ---
 check_build_all() {
     f_log "---------------------------------------------"
-    f_log "Running BuildAll checks..." green
+    if [[ "$BUILDALL_FLAG" == "yes" ]]; then
+        f_log "Running BuildAll command as $DEGREEWORKSUSER..."
+        
+        # Run build all with timeout of 5 minutes (300s) and capture output live
+        TMP_BUILD_FILE="/tmp/buildall_$$.log"
+        timeout 300 su - "$DEGREEWORKSUSER" -c "build all" | tee "$TMP_BUILD_FILE"
+        EXIT_CODE=${PIPESTATUS[0]}
 
-    BUILD_SUCCESS="Timed out"
-    BUILD_FAIL="Timed out"
-
-    if [[ "$BUILDALL_FLAG" != "yes" ]]; then
-        f_log "BuildAll checks skipped (--buildall not used)" yellow
-        return
-    fi
-
-    TMP_BUILD_LOG="/tmp/buildall_$$.log"
-
-    # Run build all as DW user in background
-    su - "$DEGREEWORKSUSER" -c "build all" > "$TMP_BUILD_LOG" 2>&1 &
-    BUILD_PID=$!
-
-    f_log "BuildAll process started (PID: $BUILD_PID), max timeout 10 minutes..."
-
-    # Timeout handling (300 sec)
-    SECONDS_WAITED=0
-    TIMEOUT=600  # 10 minutes
-
-    # Live output
-    tail -f "$TMP_BUILD_LOG" &
-    TAIL_PID=$!
-
-    while kill -0 "$BUILD_PID" 2>/dev/null; do
-        sleep 1
-        ((SECONDS_WAITED++))
-        if (( SECONDS_WAITED >= TIMEOUT )); then
-            f_log "BuildAll exceeded 10 minutes, killing process..." red
-            kill -9 "$BUILD_PID" 2>/dev/null
+        # Check if timed out
+        if [[ $EXIT_CODE -eq 124 ]]; then
+            f_log "BuildAll did not complete successfully (Timed out)" red
             BUILD_SUCCESS="Timed out"
             BUILD_FAIL="Timed out"
-            break
+        else
+            # Extract success/failure counts from log
+            BUILD_SUCCESS=$(grep -i "Success count" "$TMP_BUILD_FILE" | tail -n2 | grep -oE '[0-9]+')
+            BUILD_FAIL=$(grep -i "Failure count" "$TMP_BUILD_FILE" | tail -n2 | grep -oE '[0-9]+')
+            f_log "BuildAll completed. Success: $BUILD_SUCCESS, Failure: $BUILD_FAIL" green
         fi
-    done
 
-    # Stop tail
-    kill "$TAIL_PID" 2>/dev/null
+        # Clean up temporary log
+        rm -f "$TMP_BUILD_FILE"
 
-    # If finished normally, parse success/failure
-    if [[ "$BUILD_SUCCESS" != "Timed out" ]]; then
-        BUILD_SUCCESS=$(grep -E "Success count" "$TMP_BUILD_LOG" | awk -F= '{gsub(/ /,"",$2); print $2}' | tail -n1)
-        BUILD_FAIL=$(grep -E "Failure count" "$TMP_BUILD_LOG" | awk -F= '{gsub(/ /,"",$2); print $2}' | tail -n1)
-        f_log "BuildAll finished. Success: $BUILD_SUCCESS, Failure: $BUILD_FAIL" green
     else
-        f_log "BuildAll did not complete successfully (Timed out)" red
+        f_log "BuildAll checks were skipped (--buildall not used)" yellow
+        BUILD_SUCCESS=0
+        BUILD_FAIL=0
     fi
-
-    # Clean up
-    rm -f "$TMP_BUILD_LOG"
 }
-
 
 ###########################
 # Summary Function
@@ -496,6 +471,7 @@ print_summary() {
     printf "%-25s : %s\n" "DegreeWorks Version" "${DWVERSION:-Not set}"
     printf "%-25s : %s\n" "DGWBASE" "${DGWBASE:-Not set}"
 
+    # Classic/Hybrid section
     if [[ "$SERVER_TYPE" == "Classic" || "$SERVER_TYPE" == "Hybrid" ]]; then
         printf "%-25s : %s\n" "RabbitMQ Status" "$(systemctl is-active rabbitmq-server 2>/dev/null)"
         printf "%-25s : %s\n" "Java Version" "$(su - "$DEGREEWORKSUSER" -c "java -version" 2>&1 | head -n1)"
@@ -507,7 +483,7 @@ print_summary() {
 
         printf "%-25s : %s\n" "RMQ Test" "$RMQTEST_STATUS"
 
-        # --- SQL Results Only if --sql is used ---
+        # SQL section (only if --sql)
         if [[ "$SQL_FLAG" == "yes" ]]; then
             printf "%-25s : %s\n" "DW DB Connection" "${DB_EXIT_STATUS:-Not checked}"
             printf "%-25s : %s\n" "DW DB Version" "${DB_VERSION:-None}"
@@ -517,26 +493,26 @@ print_summary() {
             printf "%-25s : %s\n" "Duplicate Notes" "${DUP_NOTES_STATUS:-None}"
         fi
 
-        # --- BuildAll Only if --buildall is used ---
+        # BuildAll section (only if --buildall)
         if [[ "$BUILDALL_FLAG" == "yes" ]]; then
             if [[ "$BUILD_SUCCESS" == "Timed out" ]]; then
                 printf "%-25s : %s\n" "BuildAll" "Timed out"
             else
-                printf "%-25s : Success: %s Failure: %s\n" "BuildAll" "$BUILD_SUCCESS" "$BUILD_FAIL"
+                printf "%-25s : Success: %s Failure: %s\n" "BuildAll" "${BUILD_SUCCESS:-0}" "${BUILD_FAIL:-0}"
             fi
         fi
     fi
 
-    # --- Web Server Info ---
+    # Web/Hybrid section
     if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
-        # Apache presence
-        if [[ -n "$HTTPD_PROCS" ]]; then
+        # Check for Apache
+        if ps -ef | grep -iE "httpd|apache" | grep -v grep &>/dev/null; then
             printf "%-25s : %s\n" "Apache" "Yes"
         else
             printf "%-25s : %s\n" "Apache" "No"
         fi
 
-        # DW Jars with versions
+        # DW JAR files with version
         if [[ -n "$DW_JARS" ]]; then
             printf "%-25s :\n" "DW Jar"
             for jar in $(echo "$DW_JARS" | awk '{for(i=8;i<=NF;i++) print $i}'); do
@@ -545,8 +521,6 @@ print_summary() {
                     printf "  %-23s : %s\n" "$(basename "$jar")" "${JAR_VER:-Not found}"
                 fi
             done
-        else
-            printf "%-25s : %s\n" "DW Jar" "None found"
         fi
     fi
 
