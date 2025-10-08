@@ -2,10 +2,10 @@
 #########################################################################
 # Name:          dwdiscovery.sh
 # Description:   Check prechecks and gather of DW variables
-# Args:          degreeworksuser [--nosql]
+# Args:          degreeworksuser [--sql] [--buildall]
 # Author:        G. Sandoval
 # Date:          10.07.2025
-# Version:       1.12
+# Version:       1.13
 #########################################################################
 
 ####### VARIABLES SECTION #######
@@ -27,14 +27,14 @@ COUNT_NON_BLOB=""
 COUNT_BLOB=""
 DW_JARS=""
 SKIP_SQL=false
+RUN_BUILDALL=false
 
-####### FUNCTIONS SECTION #######
+####### FUNCTIONS #######
 f_log() {
     local msg="$1"
     local color="${2:-}"
     local timestamp
     timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-
     case "$color" in
         green)  echo -e "$timestamp: ${GREEN}${msg}${CLEAR}" ;;
         red)    echo -e "$timestamp: ${RED}${msg}${CLEAR}" ;;
@@ -54,15 +54,18 @@ check_root() {
 
 check_args() {
     if [[ $# -lt 1 ]]; then
-        f_log "Usage: $0 degreeworksuser [--nosql]" red
+        f_log "Usage: $0 degreeworksuser [--sql] [--buildall]" red
         exit 1
     fi
 
     DEGREEWORKSUSER="$1"
 
-    if [[ "$2" == "--nosql" ]]; then
-        SKIP_SQL=true
-    fi
+    for arg in "$@"; do
+        case "$arg" in
+            --sql) SQL_FLAG="yes" ;;
+            --buildall) BUILDALL_FLAG="yes" ;;
+        esac
+    done
 
     if id "$DEGREEWORKSUSER" &>/dev/null; then
         f_log "User $DEGREEWORKSUSER exists" green
@@ -109,7 +112,7 @@ check_storage() {
 check_dw_version() {
     f_log "---------------------------------------------"
     f_log "Checking DegreeWorks version..."
-    DWVERSION=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo \$DWRELEASE"' 2>/dev/null | tail -n1)
+    DWVERSION=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo $DWRELEASE"' 2>/dev/null | tail -n1)
     if [[ -n "$DWVERSION" ]]; then
         f_log "DegreeWorks version: $DWVERSION" green
     else
@@ -119,7 +122,7 @@ check_dw_version() {
 
 check_dgwbase() {
     f_log "Checking DGWBASE variable..."
-    DGWBASE=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo \$DGWBASE"' 2>/dev/null | tail -n1)
+    DGWBASE=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo $DGWBASE"' 2>/dev/null | tail -n1)
     if [[ -n "$DGWBASE" ]]; then
         f_log "DGWBASE variable: $DGWBASE" green
     else
@@ -130,32 +133,24 @@ check_dgwbase() {
 check_server_type() {
     f_log "---------------------------------------------"
     f_log "Detecting server type (Classic vs Web vs Hybrid)..."
-    f_log "DWVERSION='$DWVERSION'"
-    f_log "DGWBASE='$DGWBASE'"
 
-    # Detect Java jar processes
     HTTPD_PROCS=$(ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -iE "Responsive|Dashboard|Controller|API|Transit" | grep -iv "jenkins")
     JAVA_COUNT=$(echo "$HTTPD_PROCS" | grep -vi "transitexecutor.jar" | grep -v '^$' | wc -l)
 
-    f_log "Relevant Java jar processes count: $JAVA_COUNT"
-
     if [[ -n "$DWVERSION" && -n "$DGWBASE" && $JAVA_COUNT -eq 0 ]]; then
         SERVER_TYPE="Classic"
-        f_log "Decision: DW variables exist → Classic server" green
     elif [[ -z "$DWVERSION" && $JAVA_COUNT -ge 2 ]]; then
         SERVER_TYPE="Web"
-        f_log "Decision: Multiple Java jars running → Web server" yellow
     elif [[ -n "$DWVERSION" && $JAVA_COUNT -ge 1 ]]; then
         SERVER_TYPE="Hybrid"
-        f_log "Decision: DW variables + Java jars → Hybrid server" yellow
     else
         SERVER_TYPE="Unknown"
-        f_log "Decision: Could not determine server type" red
     fi
+    f_log "Detected server type: $SERVER_TYPE"
 }
 
+# --- BASIC CLASSIC/HYBRID FUNCTIONS ---
 check_rabbitmq_status() {
-    f_log "---------------------------------------------"
     f_log "Checking RabbitMQ service status..."
     if systemctl is-active --quiet rabbitmq-server; then
         f_log "RabbitMQ service is running" green
@@ -193,7 +188,6 @@ check_rabbitmq_client_versions() {
 }
 
 check_java_version() {
-    f_log "---------------------------------------------"
     f_log "Checking Java version as $DEGREEWORKSUSER..."
     JAVA_VER=$(su - "$DEGREEWORKSUSER" -c "java -version" 2>&1 | head -n 1)
     f_log "Java version detected: ${JAVA_VER:-Not detected}" green
@@ -243,6 +237,92 @@ check_perl() {
     fi
 }
 
+list_cronjobs() {
+    f_log "---------------------------------------------"
+    f_log "Listing cron jobs for $DEGREEWORKSUSER..."
+    crontab -u "$DEGREEWORKSUSER" -l 2>/dev/null
+}
+
+check_dw_base_commands() {
+    f_log "---------------------------------------------"
+    f_log "Checking DW base commands as $DEGREEWORKSUSER..."
+
+    # Only run on Classic or Hybrid servers
+    if [[ "$SERVER_TYPE" != "Classic" && "$SERVER_TYPE" != "Hybrid" ]]; then
+        f_log "Skipping DW base command checks for $SERVER_TYPE server" yellow
+        return
+    fi
+
+    # List of DW commands to run
+    DW_COMMANDS=(webshow dapshow tbeshow preqshow resshow)
+
+    # Declare associative array to track command status
+    declare -gA DW_COMMAND_STATUS
+
+    for cmd in "${DW_COMMANDS[@]}"; do
+        f_log "Running command: $cmd..."
+        CMD_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "$cmd" 2>&1)
+
+        if [[ -n "$CMD_OUTPUT" ]]; then
+            # Check if command not found
+            if echo "$CMD_OUTPUT" | grep -qi "not found"; then
+                DW_COMMAND_STATUS["$cmd"]="Not found"
+                f_log "$cmd: not found" red
+                continue
+            fi
+
+            # Special handling for preqshow
+            if [[ "$cmd" == "preqshow" ]]; then
+                # Sum all numeric values in output
+                SUM=$(echo "$CMD_OUTPUT" | grep -oE '[0-9]+' | paste -sd+ - | bc)
+                if [[ "$SUM" -eq 0 ]]; then
+                    DW_COMMAND_STATUS["$cmd"]="Not used"
+                    echo "$CMD_OUTPUT" 
+                    f_log "$cmd: all queues are empty → Not used" yellow
+                else
+                    DW_COMMAND_STATUS["$cmd"]="Running"
+                    f_log "Output from $cmd:" green
+                    echo "$CMD_OUTPUT"
+                fi
+            else
+                DW_COMMAND_STATUS["$cmd"]="Running"
+                f_log "Output from $cmd:" green
+                echo "$CMD_OUTPUT"
+            fi
+        else
+            DW_COMMAND_STATUS["$cmd"]="Not running"
+            f_log "No output from $cmd" yellow
+        fi
+    done
+}
+
+rmqtest() {
+    f_log "---------------------------------------------"
+    f_log "Running rmqtest as $DEGREEWORKSUSER..."
+
+    # Run rmqtest as dwuser
+    RMQ_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "rmqtest" 2>&1)
+    RMQ_EXIT=$?
+
+    # Print full output to general log
+    if [[ -n "$RMQ_OUTPUT" ]]; then
+        f_log "Output from rmqtest:" green
+        echo "$RMQ_OUTPUT"
+    else
+        f_log "No output from rmqtest" yellow
+    fi
+
+    # Determine summary status
+    if echo "$RMQ_OUTPUT" | grep -q "Success - reached the end"; then
+        RMQTEST_STATUS="Success"
+    elif echo "$RMQ_OUTPUT" | grep -qi "not found"; then
+        RMQTEST_STATUS="Not found"
+    else
+        RMQTEST_STATUS="Failed"
+    fi
+}
+
+# --- SQL FUNCTIONS ---
 check_dw_db() {
     f_log "---------------------------------------------"
     f_log "Checking DW database connection with jdbcverify..."
@@ -318,6 +398,7 @@ check_duplicate_notes() {
     echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:'
 }
 
+#Web/Hybrid functions
 list_dw_jar_files() {
     f_log "---------------------------------------------"
     f_log "Listing DW-related Java JAR files for $SERVER_TYPE server..."
@@ -354,18 +435,6 @@ get_dw_jar_versions() {
     done
 }
 
-list_java_processes() {
-    f_log "---------------------------------------------"
-    f_log "Listing all Java processes..."
-    ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -v grep
-}
-
-list_cronjobs() {
-    f_log "---------------------------------------------"
-    f_log "Listing cron jobs for $DEGREEWORKSUSER..."
-    crontab -u "$DEGREEWORKSUSER" -l 2>/dev/null
-}
-
 check_httpd_processes() {
     f_log "---------------------------------------------"
     f_log "Checking for Apache/httpd processes..."
@@ -378,214 +447,94 @@ check_httpd_processes() {
     fi
 }
 
-# Name:        check_dw_base_commands
-# Description: Runs DW base commands (webshow, dapshow, tbeshow, preqshow, resshow)
-#              Prints output to general log. Summary only shows running/not running.
-#---------------------------------------------------
-check_dw_base_commands() {
+# --- BUILDALL PLACEHOLDER ---
+check_build_all() {
     f_log "---------------------------------------------"
-    f_log "Checking DW base commands as $DEGREEWORKSUSER..."
-
-    # Only run on Classic or Hybrid servers
-    if [[ "$SERVER_TYPE" != "Classic" && "$SERVER_TYPE" != "Hybrid" ]]; then
-        f_log "Skipping DW base command checks for $SERVER_TYPE server" yellow
-        return
-    fi
-
-    # List of DW commands to run
-    DW_COMMANDS=(webshow dapshow tbeshow preqshow resshow)
-
-    # Declare associative array to track command status
-    declare -gA DW_COMMAND_STATUS
-
-    for cmd in "${DW_COMMANDS[@]}"; do
-        f_log "Running command: $cmd..."
-        CMD_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "$cmd" 2>&1)
-
-        if [[ -n "$CMD_OUTPUT" ]]; then
-            # Check if command not found
-            if echo "$CMD_OUTPUT" | grep -qi "not found"; then
-                DW_COMMAND_STATUS["$cmd"]="Not found"
-                f_log "$cmd: not found" red
-                continue
-            fi
-
-            # Special handling for preqshow
-            if [[ "$cmd" == "preqshow" ]]; then
-                # Sum all numeric values in output
-                SUM=$(echo "$CMD_OUTPUT" | grep -oE '[0-9]+' | paste -sd+ - | bc)
-                if [[ "$SUM" -eq 0 ]]; then
-                    DW_COMMAND_STATUS["$cmd"]="Not used"
-                    f_log "$cmd: all queues are empty → Not used" yellow
-                else
-                    DW_COMMAND_STATUS["$cmd"]="Running"
-                    f_log "Output from $cmd:" green
-                    echo "$CMD_OUTPUT"
-                fi
-            else
-                DW_COMMAND_STATUS["$cmd"]="Running"
-                f_log "Output from $cmd:" green
-                echo "$CMD_OUTPUT"
-            fi
-        else
-            DW_COMMAND_STATUS["$cmd"]="Not running"
-            f_log "No output from $cmd" yellow
-        fi
-    done
-}
-
-rmqtest() {
-    f_log "---------------------------------------------"
-    f_log "Running rmqtest as $DEGREEWORKSUSER..."
-
-    # Run rmqtest as dwuser
-    RMQ_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "rmqtest" 2>&1)
-    RMQ_EXIT=$?
-
-    # Print full output to general log
-    if [[ -n "$RMQ_OUTPUT" ]]; then
-        f_log "Output from rmqtest:" green
-        echo "$RMQ_OUTPUT"
+    if [[ "$BUILDALL_FLAG" == "yes" ]]; then
+        f_log "Running BuildAll checks... (placeholder)" green
+        BUILD_SUCCESS=0
+        BUILD_FAIL=0
     else
-        f_log "No output from rmqtest" yellow
-    fi
-
-    # Determine summary status
-    if echo "$RMQ_OUTPUT" | grep -q "Success - reached the end"; then
-        RMQTEST_STATUS="Success"
-    elif echo "$RMQ_OUTPUT" | grep -qi "not found"; then
-        RMQTEST_STATUS="Not found"
-    else
-        RMQTEST_STATUS="Failed"
+        f_log "BuildAll checks skipped (--buildall not used)" yellow
+        BUILD_SUCCESS=0
+        BUILD_FAIL=0
     fi
 }
 
-
+# --- SUMMARY ---
 print_summary() {
     echo -e "\n==================== SUMMARY ===================="
 
-    # Server type color
-    case "$SERVER_TYPE" in
-        Classic) ST_COLOR="$GREEN" ;;
-        Web)     ST_COLOR="$YELLOW" ;;
-        Hybrid)  ST_COLOR="$YELLOW" ;;
-        *)       ST_COLOR="$RED" ;;
-    esac
-    printf "%-25s : %b%s%b\n" "Server Type" "$ST_COLOR" "$SERVER_TYPE" "$CLEAR"
+    printf "%-25s : %s\n" "Server Type" "$SERVER_TYPE"
     printf "%-25s : %s\n" "DegreeWorks Version" "${DWVERSION:-Not set}"
     printf "%-25s : %s\n" "DGWBASE" "${DGWBASE:-Not set}"
 
-    # Classic or Hybrid details
     if [[ "$SERVER_TYPE" == "Classic" || "$SERVER_TYPE" == "Hybrid" ]]; then
-        if systemctl is-active --quiet rabbitmq-server; then RABBIT_COLOR="$GREEN"; else RABBIT_COLOR="$RED"; fi
-        printf "%-25s : %b%s%b\n" "RabbitMQ Status" "$RABBIT_COLOR" "$(systemctl is-active rabbitmq-server 2>/dev/null)" "$CLEAR"
-        RABBIT_VER=$(rabbitmqctl version 2>/dev/null)
-        printf "%-25s : %s\n" "RabbitMQ Version" "$RABBIT_VER"
+        printf "%-25s : %s\n" "RabbitMQ Status" "$(systemctl is-active rabbitmq-server 2>/dev/null)"
+        printf "%-25s : %s\n" "Java Version" "$(su - "$DEGREEWORKSUSER" -c "java -version" 2>&1 | head -n1)"
 
-        JAVA_VER=$(su - "$DEGREEWORKSUSER" -c "java -version" 2>&1 | head -n1)
-        printf "%-25s : %s\n" "Java Version" "$JAVA_VER"
+        printf "%-25s : %s\n" "DW Base Commands" ""
+        for cmd in "${!DW_COMMAND_STATUS[@]}"; do
+            printf "  %-23s : %s\n" "$cmd" "${DW_COMMAND_STATUS[$cmd]}"
+        done
 
-        CRON_COUNT=$(crontab -u "$DEGREEWORKSUSER" -l 2>/dev/null | grep -v '^#' | grep -v '^$' | wc -l)
-        CRON_COLOR="$GREEN"
-        [[ "$CRON_COUNT" -eq 0 ]] && CRON_COLOR="$YELLOW"
-        printf "%-25s : %b%d job(s)%b\n" "Cron Jobs Count" "$CRON_COLOR" "$CRON_COUNT" "$CLEAR"
-
-        BLOB_COLOR="$YELLOW"
-        [[ "$COUNT_NON_BLOB" -eq 0 ]] && BLOB_COLOR="$GREEN"
-        if [[ "$NOSQL_FLAG" == "yes" ]]; then
-            printf "%-25s : %s\n" "SQL checks" "skipped (--nosql)"
-        else
-            printf "%-25s : %bNon-BLOB: %s, BLOB: %s%b\n" "BLOB Conversion" "$BLOB_COLOR" "$COUNT_NON_BLOB" "$COUNT_BLOB" "$CLEAR"
-        fi
-
-        # DW Base Commands summary
-        if [[ -n "${DW_COMMAND_STATUS[@]}" ]]; then
-            printf "%-25s : %s\n" "DW Base Commands" ""
-            for cmd in "${!DW_COMMAND_STATUS[@]}"; do
-                STATUS="${DW_COMMAND_STATUS[$cmd]}"
-                case "$STATUS" in
-                    "Running") COLOR="$GREEN" ;;
-                    "Not used") COLOR="$YELLOW" ;;
-                    "Not running") COLOR="$YELLOW" ;;
-                    "Not found") COLOR="$RED" ;;
-                    *) COLOR="$CLEAR" ;;
-                esac
-                printf "  %-23s : %b%s%b\n" "$cmd" "$COLOR" "$STATUS" "$CLEAR"
-            done
-        fi
+        printf "%-25s : %s\n" "RMQ Test" "$RMQTEST_STATUS"
+        printf "%-25s : Success: %d Failure: %d\n" "BuildAll" "$BUILD_SUCCESS" "$BUILD_FAIL"
     fi
-
-    # RMQ test
-    if [[ -n "$RMQTEST_STATUS" ]]; then
-    case "$RMQTEST_STATUS" in
-        Success) COLOR="$GREEN" ;;
-        Failed)  COLOR="$RED" ;;
-        Not\ found) COLOR="$RED" ;;
-        *) COLOR="$CLEAR" ;;
-    esac
-    printf "%-25s : %b%s%b\n" "RMQ Test" "$COLOR" "$RMQTEST_STATUS" "$CLEAR"
-fi
-
-    # Web or Hybrid details
-    if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
-        HTTPD_COUNT=$(echo "$HTTPD_PROCS" | grep -v '^$' | wc -l)
-        if [[ "$HTTPD_COUNT" -gt 0 ]]; then
-            HTTPD_COLOR="$GREEN"; HTTPD_STATUS="Found $HTTPD_COUNT process(es)"
-        else
-            HTTPD_COLOR="$YELLOW"; HTTPD_STATUS="No Apache/httpd processes found"
-        fi
-        printf "%-25s : %b%s%b\n" "Apache/httpd Processes" "$HTTPD_COLOR" "$HTTPD_STATUS" "$CLEAR"
-    fi
-
-    echo "================================================"
+    echo "=================================================="
 }
 
-main() {
-    f_log "---------------------------------------------"
-    f_log "START - checking DegreeWorks Environment ..."
+# ---------------- MAIN ----------------
+f_log "---------------------------------------------"
+f_log "START - checking DegreeWorks Environment ..."
+check_root
+check_args "$@"
+check_os
+check_storage
+check_dw_version
+check_dgwbase
+check_server_type
+   
+   if [[ "$SERVER_TYPE" == "Classic" || "$SERVER_TYPE" == "Hybrid" ]]; then
+# Basic checks
+check_rabbitmq_status
+check_rabbitmq_server_version
+check_rabbitmq_client_versions
+check_java_version
+check_apache_fop
+check_gcc
+check_openssl
+check_perl
+list_cronjobs
+check_dw_base_commands
+rmqtest
 
-    check_root
-    check_args "$@"
-    check_os
-    check_storage
-    check_dw_version
-    check_dgwbase
-    check_server_type
-
-    if [[ "$SERVER_TYPE" == "Classic" || "$SERVER_TYPE" == "Hybrid" ]]; then
-        check_rabbitmq_status
-        check_rabbitmq_server_version
-        check_rabbitmq_client_versions
-        rmqtest
-        check_java_version
-        check_apache_fop
-        check_gcc
-        check_openssl
-        check_perl
-        check_dw_db
-        check_db_version
-        list_cronjobs   
-        check_dw_base_commands
-
-        if [[ "$SKIP_SQL" == false ]]; then
-            check_blob_conversion
-            check_duplicate_exceptions
-            check_duplicate_notes
-        else
-            f_log "SQL checks were skipped (--nosql)" yellow
+# SQL checks if flag enabled
+if [[ "$SQL_FLAG" == "yes"  ]]; then
+    check_dw_db
+    check_blob_conversion
+    check_duplicate_exceptions
+    check_duplicate_notes
+else
+            f_log "SQL checks were skipped (--sql)" yellow
         fi
-    fi
 
-    if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
+fi
+
+if [[ "$BUILDALL_FLAG" == "yes" ]]; then
+   check_build_all
+else
+          f_log "BUILD checks were skipped (--buildall)" yellow
+fi
+
+
+
+if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
         list_dw_jar_files
         get_dw_jar_versions
         check_httpd_processes
-    fi
+fi
 
-    print_summary
 
-    f_log "---------------------------------------------"
-    f_log "END - DegreeWorks Environment check complete."
-}
-
-main "$@"
+# Summary
+print_summary
