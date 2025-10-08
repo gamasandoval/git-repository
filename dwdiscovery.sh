@@ -280,7 +280,7 @@ check_dw_base_commands() {
                     echo "$CMD_OUTPUT" 
                     f_log "$cmd: all queues are empty → Not used" yellow
                 else
-                    DW_COMMAND_STATUS["$cmd"]="Running"
+                    DW_COMMAND_STATUS["$cmd"]="Running" 
                     f_log "Output from $cmd:" green
                     echo "$CMD_OUTPUT"
                 fi
@@ -322,19 +322,17 @@ rmqtest() {
     fi
 }
 
-# --- SQL FUNCTIONS ---
+###########################
+# SQL Functions
+###########################
 check_dw_db() {
     f_log "---------------------------------------------"
-    f_log "Checking DW database connection with jdbcverify..."
+    f_log "Checking DW database connection..."
     DB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c 'jdbcverify --verbose' 2>&1)
     DB_EXIT=$?
-    if [[ $DB_EXIT -eq 0 ]]; then
-        f_log "Database connection OK" green
-        echo "$DB_OUTPUT"
-    else
-        f_log "Database connection failed" red
-        echo "$DB_OUTPUT"
-    fi
+    DB_EXIT_STATUS=$([[ $DB_EXIT -eq 0 ]] && echo "OK" || echo "Failed")
+    f_log "Database connection: $DB_EXIT_STATUS" $([[ $DB_EXIT -eq 0 ]] && echo green || echo red)
+    echo "$DB_OUTPUT"
 }
 
 check_db_version() {
@@ -359,43 +357,26 @@ check_db_version() {
 }
 
 check_blob_conversion() {
-    f_log "---------------------------------------------"
-    f_log "Checking BLOB conversion requirement..."
-    if [[ -z "$DWVERSION" ]]; then
-        f_log "DWVERSION is not set. Skipping BLOB conversion check." red
-        return
-    fi
-
+    f_log "Checking BLOB conversion..."
     SQL_NON_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO!='BLOB';"
     SQL_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO='BLOB';"
-
-    f_log "Executing SQL (Non-BLOB): $SQL_NON_BLOB"
-    NON_BLOB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_NON_BLOB\"" 2>&1)
-    COUNT_NON_BLOB=$(echo "$NON_BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n 1)
-    f_log "Non-BLOB count: $COUNT_NON_BLOB"
-
-    f_log "Executing SQL (BLOB): $SQL_BLOB"
-    BLOB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_BLOB\"" 2>&1)
-    COUNT_BLOB=$(echo "$BLOB_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:' | head -n 1)
-    f_log "BLOB count: $COUNT_BLOB"
+    COUNT_NON_BLOB=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_NON_BLOB\"" 2>/dev/null | grep -o '[0-9]\+')
+    COUNT_BLOB=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_BLOB\"" 2>/dev/null | grep -o '[0-9]\+')
+    f_log "Non-BLOB: $COUNT_NON_BLOB, BLOB: $COUNT_BLOB"
 }
 
 check_duplicate_exceptions() {
-    f_log "---------------------------------------------"
-    SQL_QUERY="select dap_stu_id, dap_exc_num, count(*) cnt from dap_except_dtl group by dap_stu_id, dap_exc_num having count(*) > 1 order by 1, 2;"
-    f_log "Executing SQL: $SQL_QUERY"
-    SQL_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_QUERY\"" 2>&1)
-    f_log "Duplicate exceptions:"
-    echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:'
+    SQL="select dap_stu_id, dap_exc_num, count(*) cnt from dap_except_dtl group by dap_stu_id,dap_exc_num having count(*)>1 order by 1,2;"
+    OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL\"" 2>/dev/null)
+    DUP_EXCEPTIONS_STATUS=$(echo "$OUTPUT" | grep -v -E '^$|^runsql:' | wc -l)
+    f_log "Duplicate exceptions: $DUP_EXCEPTIONS_STATUS"
 }
 
 check_duplicate_notes() {
-    f_log "---------------------------------------------"
-    SQL_QUERY="select dap_stu_id, dap_note_num, count(*) cnt from dap_note_dtl group by dap_stu_id, dap_note_num having count(*) > 1 order by 1, 2;"
-    f_log "Executing SQL: $SQL_QUERY"
-    SQL_OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL_QUERY\"" 2>&1)
-    f_log "Duplicate notes:"
-    echo "$SQL_OUTPUT" | grep -v -E '^$|^runsql:|^-ksh:'
+    SQL="select dap_stu_id, dap_note_num, count(*) cnt from dap_note_dtl group by dap_stu_id,dap_note_num having count(*)>1 order by 1,2;"
+    OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL\"" 2>/dev/null)
+    DUP_NOTES_STATUS=$(echo "$OUTPUT" | grep -v -E '^$|^runsql:' | wc -l)
+    f_log "Duplicate notes: $DUP_NOTES_STATUS"
 }
 
 #Web/Hybrid functions
@@ -479,8 +460,23 @@ print_summary() {
         done
 
         printf "%-25s : %s\n" "RMQ Test" "$RMQTEST_STATUS"
-        printf "%-25s : Success: %d Failure: %d\n" "BuildAll" "$BUILD_SUCCESS" "$BUILD_FAIL"
+
+        # --- SQL Results Only if --sql is used ---
+        if [[ "$SQL_FLAG" == "yes" ]]; then
+            printf "%-25s : %s\n" "DW DB Connection" "${DB_EXIT_STATUS:-Not checked}"
+            printf "%-25s : %s\n" "DW DB Version" "${DB_VERSION:-None}"
+            printf "%-25s : %s\n" "BLOB Count NonBlob" "${COUNT_NON_BLOB:-0}" 
+            printf "%-25s : %s\n" "BLOB Count Blob" "${COUNT_BLOB:-0}"
+            printf "%-25s : %s\n" "Duplicate Exceptions" "${DUP_EXCEPTIONS_STATUS:-None}"
+            printf "%-25s : %s\n" "Duplicate Notes" "${DUP_NOTES_STATUS:-None}"
+        fi
+
+        # --- BuildAll Only if --buildall is used ---
+        if [[ "$BUILDALL_FLAG" == "yes" ]]; then
+            printf "%-25s : Success: %d Failure: %d\n" "BuildAll" "$BUILD_SUCCESS" "$BUILD_FAIL"
+        fi
     fi
+
     echo "=================================================="
 }
 
@@ -512,6 +508,7 @@ rmqtest
 # SQL checks if flag enabled
 if [[ "$SQL_FLAG" == "yes"  ]]; then
     check_dw_db
+    check_db_version
     check_blob_conversion
     check_duplicate_exceptions
     check_duplicate_notes
