@@ -408,12 +408,13 @@ get_dw_jar_versions() {
         return
     fi
 
-    for jar in $(echo "$DW_JARS" | awk '{for(i=8;i<=NF;i++) print $i}'); do
-        if [[ -f "$jar" ]]; then
+    while read -r line; do
+        jar=$(echo "$line" | grep -oE '\S+\.jar')
+        if [[ -n "$jar" && -f "$jar" ]]; then
             JAR_VER=$(unzip -p "$jar" META-INF/MANIFEST.MF 2>/dev/null | grep -i "Implementation-Version" | head -n1)
-            f_log "JAR: $(basename "$jar") → Version: ${JAR_VER:-Not found}"
+            printf "  %-23s : %s\n" "$(basename "$jar")" "${JAR_VER:-Not found}"
         fi
-    done
+    done <<< "$DW_JARS"
 }
 
 check_httpd_processes() {
@@ -471,7 +472,7 @@ print_summary() {
     printf "%-25s : %s\n" "DegreeWorks Version" "${DWVERSION:-Not set}"
     printf "%-25s : %s\n" "DGWBASE" "${DGWBASE:-Not set}"
 
-    # Classic/Hybrid section
+    # Classic/Hybrid sections
     if [[ "$SERVER_TYPE" == "Classic" || "$SERVER_TYPE" == "Hybrid" ]]; then
         printf "%-25s : %s\n" "RabbitMQ Status" "$(systemctl is-active rabbitmq-server 2>/dev/null)"
         printf "%-25s : %s\n" "Java Version" "$(su - "$DEGREEWORKSUSER" -c "java -version" 2>&1 | head -n1)"
@@ -483,49 +484,47 @@ print_summary() {
 
         printf "%-25s : %s\n" "RMQ Test" "$RMQTEST_STATUS"
 
-        # SQL section (only if --sql)
         if [[ "$SQL_FLAG" == "yes" ]]; then
             printf "%-25s : %s\n" "DW DB Connection" "${DB_EXIT_STATUS:-Not checked}"
             printf "%-25s : %s\n" "DW DB Version" "${DB_VERSION:-None}"
-            printf "%-25s : %s\n" "BLOB Count NonBlob" "${COUNT_NON_BLOB:-0}" 
+            printf "%-25s : %s\n" "BLOB Count NonBlob" "${COUNT_NON_BLOB:-0}"
             printf "%-25s : %s\n" "BLOB Count Blob" "${COUNT_BLOB:-0}"
             printf "%-25s : %s\n" "Duplicate Exceptions" "${DUP_EXCEPTIONS_STATUS:-None}"
             printf "%-25s : %s\n" "Duplicate Notes" "${DUP_NOTES_STATUS:-None}"
         fi
 
-        # BuildAll section (only if --buildall)
         if [[ "$BUILDALL_FLAG" == "yes" ]]; then
-            if [[ "$BUILD_SUCCESS" == "Timed out" ]]; then
-                printf "%-25s : %s\n" "BuildAll" "Timed out"
-            else
-                printf "%-25s : Success: %s Failure: %s\n" "BuildAll" "${BUILD_SUCCESS:-0}" "${BUILD_FAIL:-0}"
-            fi
+            printf "%-25s : Success: %s Failure: %s\n" "BuildAll" "${BUILD_SUCCESS:-0}" "${BUILD_FAIL:-0}"
         fi
     fi
 
-    # Web/Hybrid section
+    # Web/Hybrid specific summary
     if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
-        # Check for Apache
-        if ps -ef | grep -iE "httpd|apache" | grep -v grep &>/dev/null; then
+        # Apache check
+        if pgrep -f "httpd|apache" >/dev/null; then
             printf "%-25s : %s\n" "Apache" "Yes"
         else
             printf "%-25s : %s\n" "Apache" "No"
         fi
 
-        # DW JAR files with version
+        # DW JARs
+        printf "%-25s :\n" "DW Jar"
         if [[ -n "$DW_JARS" ]]; then
-            printf "%-25s :\n" "DW Jar"
-            for jar in $(echo "$DW_JARS" | awk '{for(i=8;i<=NF;i++) print $i}'); do
-                if [[ -f "$jar" ]]; then
-                    JAR_VER=$(unzip -p "$jar" META-INF/MANIFEST.MF 2>/dev/null | grep -i "Implementation-Version" | head -n1 | awk -F: '{gsub(/ /,"",$2); print $2}')
+            while read -r line; do
+                jar=$(echo "$line" | grep -oE '\S+\.jar')
+                if [[ -n "$jar" && -f "$jar" ]]; then
+                    JAR_VER=$(unzip -p "$jar" META-INF/MANIFEST.MF 2>/dev/null | grep -i "Implementation-Version" | head -n1)
                     printf "  %-23s : %s\n" "$(basename "$jar")" "${JAR_VER:-Not found}"
                 fi
-            done
+            done <<< "$DW_JARS"
+        else
+            printf "  None found\n"
         fi
     fi
 
     echo "=================================================="
 }
+
 
 # ---------------- MAIN ----------------
 f_log "---------------------------------------------"
