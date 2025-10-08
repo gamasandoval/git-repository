@@ -431,18 +431,64 @@ check_httpd_processes() {
 # --- BUILDALL PLACEHOLDER ---
 check_build_all() {
     f_log "---------------------------------------------"
-    if [[ "$BUILDALL_FLAG" == "yes" ]]; then
-        f_log "Running BuildAll checks... (placeholder)" green
-        BUILD_SUCCESS=0
-        BUILD_FAIL=0
-    else
+    f_log "Running BuildAll checks..." green
+
+    BUILD_SUCCESS="Timed out"
+    BUILD_FAIL="Timed out"
+
+    if [[ "$BUILDALL_FLAG" != "yes" ]]; then
         f_log "BuildAll checks skipped (--buildall not used)" yellow
-        BUILD_SUCCESS=0
-        BUILD_FAIL=0
+        return
     fi
+
+    TMP_BUILD_LOG="/tmp/buildall_$$.log"
+
+    # Run build all as DW user in background
+    su - "$DEGREEWORKSUSER" -c "build all" > "$TMP_BUILD_LOG" 2>&1 &
+    BUILD_PID=$!
+
+    f_log "BuildAll process started (PID: $BUILD_PID), max timeout 5 minutes..."
+
+    # Timeout handling (300 sec)
+    SECONDS_WAITED=0
+    TIMEOUT=300
+
+    # Live output
+    tail -f "$TMP_BUILD_LOG" &
+    TAIL_PID=$!
+
+    while kill -0 "$BUILD_PID" 2>/dev/null; do
+        sleep 1
+        ((SECONDS_WAITED++))
+        if (( SECONDS_WAITED >= TIMEOUT )); then
+            f_log "BuildAll exceeded 5 minutes, killing process..." red
+            kill -9 "$BUILD_PID" 2>/dev/null
+            BUILD_SUCCESS="Timed out"
+            BUILD_FAIL="Timed out"
+            break
+        fi
+    done
+
+    # Stop tail
+    kill "$TAIL_PID" 2>/dev/null
+
+    # If finished normally, parse success/failure
+    if [[ "$BUILD_SUCCESS" != "Timed out" ]]; then
+        BUILD_SUCCESS=$(grep -E "Success count" "$TMP_BUILD_LOG" | awk -F= '{gsub(/ /,"",$2); print $2}' | tail -n1)
+        BUILD_FAIL=$(grep -E "Failure count" "$TMP_BUILD_LOG" | awk -F= '{gsub(/ /,"",$2); print $2}' | tail -n1)
+        f_log "BuildAll finished. Success: $BUILD_SUCCESS, Failure: $BUILD_FAIL" green
+    else
+        f_log "BuildAll did not complete successfully (Timed out)" red
+    fi
+
+    # Clean up
+    rm -f "$TMP_BUILD_LOG"
 }
 
-# --- SUMMARY ---
+
+###########################
+# Summary Function
+###########################
 print_summary() {
     echo -e "\n==================== SUMMARY ===================="
 
@@ -473,7 +519,34 @@ print_summary() {
 
         # --- BuildAll Only if --buildall is used ---
         if [[ "$BUILDALL_FLAG" == "yes" ]]; then
-            printf "%-25s : Success: %d Failure: %d\n" "BuildAll" "$BUILD_SUCCESS" "$BUILD_FAIL"
+            if [[ "$BUILD_SUCCESS" == "Timed out" ]]; then
+                printf "%-25s : %s\n" "BuildAll" "Timed out"
+            else
+                printf "%-25s : Success: %s Failure: %s\n" "BuildAll" "$BUILD_SUCCESS" "$BUILD_FAIL"
+            fi
+        fi
+    fi
+
+    # --- Web Server Info ---
+    if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
+        # Apache presence
+        if [[ -n "$HTTPD_PROCS" ]]; then
+            printf "%-25s : %s\n" "Apache" "Yes"
+        else
+            printf "%-25s : %s\n" "Apache" "No"
+        fi
+
+        # DW Jars with versions
+        if [[ -n "$DW_JARS" ]]; then
+            printf "%-25s :\n" "DW Jar"
+            for jar in $(echo "$DW_JARS" | awk '{for(i=8;i<=NF;i++) print $i}'); do
+                if [[ -f "$jar" ]]; then
+                    JAR_VER=$(unzip -p "$jar" META-INF/MANIFEST.MF 2>/dev/null | grep -i "Implementation-Version" | head -n1 | awk -F: '{gsub(/ /,"",$2); print $2}')
+                    printf "  %-23s : %s\n" "$(basename "$jar")" "${JAR_VER:-Not found}"
+                fi
+            done
+        else
+            printf "%-25s : %s\n" "DW Jar" "None found"
         fi
     fi
 
@@ -516,7 +589,7 @@ else
             f_log "SQL checks were skipped (--sql)" yellow
         fi
 
-fi
+
 
 if [[ "$BUILDALL_FLAG" == "yes" ]]; then
    check_build_all
@@ -524,6 +597,7 @@ else
           f_log "BUILD checks were skipped (--buildall)" yellow
 fi
 
+fi
 
 
 if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
