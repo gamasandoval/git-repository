@@ -447,11 +447,11 @@ check_build_all() {
     su - "$DEGREEWORKSUSER" -c "build all" > "$TMP_BUILD_LOG" 2>&1 &
     BUILD_PID=$!
 
-    f_log "BuildAll process started (PID: $BUILD_PID), max timeout 5 minutes..."
+    f_log "BuildAll process started (PID: $BUILD_PID), max timeout 10 minutes..."
 
     # Timeout handling (300 sec)
     SECONDS_WAITED=0
-    TIMEOUT=300
+    TIMEOUT=600  # 10 minutes
 
     # Live output
     tail -f "$TMP_BUILD_LOG" &
@@ -461,7 +461,7 @@ check_build_all() {
         sleep 1
         ((SECONDS_WAITED++))
         if (( SECONDS_WAITED >= TIMEOUT )); then
-            f_log "BuildAll exceeded 5 minutes, killing process..." red
+            f_log "BuildAll exceeded 10 minutes, killing process..." red
             kill -9 "$BUILD_PID" 2>/dev/null
             BUILD_SUCCESS="Timed out"
             BUILD_FAIL="Timed out"
