@@ -2,10 +2,10 @@
 #########################################################################
 # Name:          dwdiscovery.sh
 # Description:   Check prechecks and gather of DW variables
-# Args:          degreeworksuser [--sql] [--buildall]
+# Args:          degreeworksuser [--sql] [--buildall] [--log]
 # Author:        G. Sandoval
 # Date:          10.07.2025
-# Version:       1.13
+# Version:       1.14
 #########################################################################
 
 ####### VARIABLES SECTION #######
@@ -28,6 +28,8 @@ COUNT_BLOB=""
 DW_JARS=""
 SKIP_SQL=false
 RUN_BUILDALL=false
+LOG_FLAG="false"
+
 
 ####### FUNCTIONS #######
 f_log() {
@@ -54,7 +56,7 @@ check_root() {
 
 check_args() {
     if [[ $# -lt 1 ]]; then
-        f_log "Usage: $0 degreeworksuser [--sql] [--buildall]" red
+        f_log "Usage: $0 degreeworksuser [--sql] [--buildall] [--log] " red
         exit 1
     fi
 
@@ -63,6 +65,7 @@ check_args() {
     for arg in "$@"; do
         case "$arg" in
             --sql) SQL_FLAG="yes" ;;
+            --log) LOG_FLAG="yes" ;;
             --buildall) BUILDALL_FLAG="yes" ;;
         esac
     done
@@ -77,6 +80,8 @@ check_args() {
 
 check_os() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+
     f_log "Gathering OS information..."
     f_log "Hostname: $(hostname)"
     f_log "OS: $(grep '^PRETTY_NAME' /etc/os-release | cut -d= -f2- | tr -d '\"')"
@@ -92,6 +97,8 @@ check_filesystems() {
 
 check_fs_usage() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+
     f_log "Checking filesystem usage..."
     local threshold=$THRESHOLD
     df -h --output=source,pcent,size,used,avail,target | tail -n +2 | while read -r fs pcent size used avail mount; do
@@ -111,6 +118,8 @@ check_storage() {
 
 check_dw_version() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+
     f_log "Checking DegreeWorks version..."
     DWVERSION=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo $DWRELEASE"' 2>/dev/null | tail -n1)
     if [[ -n "$DWVERSION" ]]; then
@@ -131,6 +140,7 @@ check_dgwbase() {
 }
 
 check_server_type() {
+    f_log "---------------------------------------------"
     f_log "---------------------------------------------"
     f_log "Detecting server type (Classic vs Web vs Hybrid)..."
 
@@ -195,6 +205,7 @@ check_java_version() {
 
 check_apache_fop() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Checking Apache FOP..."
     FOP_PATH=$(su - "$DEGREEWORKSUSER" -c 'which fop' 2>/dev/null)
     if [[ -n "$FOP_PATH" ]]; then
@@ -205,6 +216,7 @@ check_apache_fop() {
 }
 
 check_gcc() {
+    f_log "---------------------------------------------"
     f_log "---------------------------------------------"
     f_log "Checking GCC version..."
     if command -v gcc &>/dev/null; then
@@ -217,6 +229,7 @@ check_gcc() {
 
 check_openssl() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Checking OpenSSL version..."
     if command -v openssl &>/dev/null; then
         OPENSSL_VER=$(openssl version 2>/dev/null)
@@ -227,6 +240,7 @@ check_openssl() {
 }
 
 check_perl() {
+    f_log "---------------------------------------------"
     f_log "---------------------------------------------"
     f_log "Checking Perl version..."
     if command -v perl &>/dev/null; then
@@ -239,11 +253,13 @@ check_perl() {
 
 list_cronjobs() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Listing cron jobs for $DEGREEWORKSUSER..."
     crontab -u "$DEGREEWORKSUSER" -l 2>/dev/null
 }
 
 check_dw_base_commands() {
+    f_log "---------------------------------------------"
     f_log "---------------------------------------------"
     f_log "Checking DW base commands as $DEGREEWORKSUSER..."
 
@@ -298,6 +314,7 @@ check_dw_base_commands() {
 
 rmqtest() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Running rmqtest as $DEGREEWORKSUSER..."
 
     # Run rmqtest as dwuser
@@ -327,6 +344,7 @@ rmqtest() {
 ###########################
 check_dw_db() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Checking DW database connection..."
     DB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c 'jdbcverify --verbose' 2>&1)
     DB_EXIT=$?
@@ -336,6 +354,7 @@ check_dw_db() {
 }
 
 check_db_version() {
+    f_log "---------------------------------------------"
     f_log "---------------------------------------------"
     f_log "Checking DW database version..."
 
@@ -382,6 +401,7 @@ check_duplicate_notes() {
 #Web/Hybrid functions
 list_dw_jar_files() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Listing DW-related Java JAR files for $SERVER_TYPE server..."
 
     if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
@@ -401,6 +421,7 @@ list_dw_jar_files() {
 
 get_dw_jar_versions() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Getting DW JAR versions..."
 
     if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
@@ -419,6 +440,7 @@ get_dw_jar_versions() {
 
 check_httpd_processes() {
     f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Checking for Apache/httpd processes..."
     HTTPD_PROCS=$(ps -ef | grep -iE "httpd|apache" | grep -v grep)
     if [[ -n "$HTTPD_PROCS" ]]; then
@@ -431,6 +453,7 @@ check_httpd_processes() {
 
 # --- BUILDALL Function ---
 check_build_all() {
+    f_log "---------------------------------------------"
     f_log "---------------------------------------------"
     if [[ "$BUILDALL_FLAG" == "yes" ]]; then
         f_log "Running BuildAll command as $DEGREEWORKSUSER..."
@@ -460,6 +483,63 @@ check_build_all() {
         BUILD_SUCCESS=0
         BUILD_FAIL=0
     fi
+}
+
+# --- Review logs Function ---
+check_dw_logs() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+    f_log "Checking recent DW logs..."
+
+    # Only applies to Classic and Hybrid servers
+    if [[ "$SERVER_TYPE" != "Classic" && "$SERVER_TYPE" != "Hybrid" ]]; then
+        f_log "Skipping DW log check (not applicable for Web servers)"
+        return
+    fi
+
+    LOG_DIR="$DGWBASE/admin/logdebug"
+    WEB_LOG_FILE=""
+    TRANSIT_LOG_FILE=""
+
+    # Find latest web.log*
+    if ls "$LOG_DIR"/web.log* >/dev/null 2>&1; then
+        WEB_LOG_FILE=$(ls -1t "$LOG_DIR"/web.log* 2>/dev/null | head -n 1)
+    fi
+
+    # Find latest transitexecutor.log*
+    if ls "$LOG_DIR"/transitexecutor.log* >/dev/null 2>&1; then
+        TRANSIT_LOG_FILE=$(ls -1t "$LOG_DIR"/transitexecutor.log* 2>/dev/null | head -n 1)
+    fi
+
+    WEB_ERRORS="Not found"
+    TRANSIT_ERRORS="Not found"
+
+    # --- Web log ---
+    if [[ -n "$WEB_LOG_FILE" && -f "$WEB_LOG_FILE" ]]; then
+        f_log "---------------------------------------------"
+        f_log "---------------------------------------------"
+        f_log "===== Last 50 lines of $(basename "$WEB_LOG_FILE") ====="
+        su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null
+        if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
+            WEB_ERRORS="Yes"
+        else
+            WEB_ERRORS="No"
+        fi
+    fi
+
+    # --- Transit log ---
+    if [[ -n "$TRANSIT_LOG_FILE" && -f "$TRANSIT_LOG_FILE" ]]; then
+        f_log "---------------------------------------------"
+        f_log "---------------------------------------------"
+        f_log "===== Last 50 lines of $(basename "$TRANSIT_LOG_FILE") ====="
+        su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null
+        if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
+            TRANSIT_ERRORS="Yes"
+        else
+            TRANSIT_ERRORS="No"
+        fi
+    fi
+
 }
 
 ###########################
@@ -496,6 +576,11 @@ print_summary() {
         if [[ "$BUILDALL_FLAG" == "yes" ]]; then
             printf "%-25s : Success: %s Failure: %s\n" "BuildAll" "${BUILD_SUCCESS:-0}" "${BUILD_FAIL:-0}"
         fi
+
+        if [[ "$LOG_FLAG" == "yes" ]]; then
+            printf "%-25s : %s\n" "Web Log Errors" "${WEB_ERRORS:-Not found}"
+            printf "%-25s : %s\n" "Transit Log Errors" "${TRANSIT_ERRORS:-Not found}"
+        fi
     fi
 
     # Web/Hybrid specific summary
@@ -528,6 +613,8 @@ print_summary() {
 
 # ---------------- MAIN ----------------
 f_log "---------------------------------------------"
+f_log "---------------------------------------------"
+
 f_log "START - checking DegreeWorks Environment ..."
 check_root
 check_args "$@"
@@ -538,39 +625,46 @@ check_dgwbase
 check_server_type
    
    if [[ "$SERVER_TYPE" == "Classic" || "$SERVER_TYPE" == "Hybrid" ]]; then
-# Basic checks
-check_rabbitmq_status
-check_rabbitmq_server_version
-check_rabbitmq_client_versions
-check_java_version
-check_apache_fop
-check_gcc
-check_openssl
-check_perl
-list_cronjobs
-check_dw_base_commands
-rmqtest
+    # Basic checks
+    check_rabbitmq_status
+    check_rabbitmq_server_version
+    check_rabbitmq_client_versions
+    check_java_version
+    check_apache_fop
+    check_gcc
+    check_openssl
+    check_perl
+    list_cronjobs
+    check_dw_base_commands
+    rmqtest
 
-# SQL checks if flag enabled
-if [[ "$SQL_FLAG" == "yes"  ]]; then
-    check_dw_db
-    check_db_version
-    check_blob_conversion
-    check_duplicate_exceptions
-    check_duplicate_notes
-else
-            f_log "SQL checks were skipped (--sql)" yellow
+        # SQL checks if flag enabled
+        if [[ "$SQL_FLAG" == "yes"  ]]; then
+            check_dw_db
+            check_db_version
+            check_blob_conversion
+            check_duplicate_exceptions
+            check_duplicate_notes
+        else
+                    f_log "SQL checks were skipped (--sql)" yellow
         fi
 
 
 
-if [[ "$BUILDALL_FLAG" == "yes" ]]; then
-   check_build_all
-else
-          f_log "BUILD checks were skipped (--buildall)" yellow
-fi
+        if [[ "$BUILDALL_FLAG" == "yes" ]]; then
+           check_build_all
+           else
+           f_log "BUILD checks were skipped (--buildall)" yellow
+        fi
 
-fi
+        if [[ "$LOG_FLAG" == "yes" ]]; then
+            check_dw_logs
+             else
+            f_log "LOG checks were skipped (--log)" yellow
+        fi
+
+
+    fi
 
 
 if [[ "$SERVER_TYPE" == "Web" || "$SERVER_TYPE" == "Hybrid" ]]; then
