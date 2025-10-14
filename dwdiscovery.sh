@@ -410,7 +410,7 @@ list_dw_jar_files() {
         return
     fi
 
-    DW_JARS=$(ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -iE "Responsive|Dashboard|Controller|API|Transit" | grep -iv "jenkins")
+    DW_JARS=$(ps -fe | grep -i '.jar' | grep -iE "Responsive|Dashboard|Controller|API|Transit" | grep -iv "jenkins")
 
     if [[ -n "$DW_JARS" ]]; then
         f_log "Found DW Java JAR processes:" green
