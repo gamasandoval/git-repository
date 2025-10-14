@@ -282,7 +282,7 @@ check_dw_base_commands() {
 
         if [[ -n "$CMD_OUTPUT" ]]; then
             # Check if command not found
-            if echo "$CMD_OUTPUT" | grep -qi "not found"; then
+            if echo "$CMD_OUTPUT" | grep -qi "$cmd" | grep -qi "not found"; then
                 DW_COMMAND_STATUS["$cmd"]="Not found"
                 f_log "$cmd: not found" red
                 continue
