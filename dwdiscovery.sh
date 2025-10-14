@@ -122,7 +122,7 @@ check_dw_version() {
     f_log "---------------------------------------------"
 
     f_log "Checking DegreeWorks version..."
-    DWVERSION=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo $DWRELEASE"' 2>/dev/null | tail -n1)
+    DWVERSION=$(su - "$DEGREEWORKSUSER" -c 'echo $DWRELEASE' 2>/dev/null | tail -n1)
     if [[ -n "$DWVERSION" ]]; then
         f_log "DegreeWorks version: $DWVERSION" green
     else
@@ -132,7 +132,7 @@ check_dw_version() {
 
 check_dgwbase() {
     f_log "Checking DGWBASE variable..."
-    DGWBASE=$(su - "$DEGREEWORKSUSER" -c 'bash -l -c "echo $DGWBASE"' 2>/dev/null | tail -n1)
+    DGWBASE=$(su - "$DEGREEWORKSUSER" -c 'echo $DGWBASE' 2>/dev/null | tail -n1)
     if [[ -n "$DGWBASE" ]]; then
         f_log "DGWBASE variable: $DGWBASE" green
     else
