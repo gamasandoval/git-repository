@@ -74,7 +74,8 @@ check_args() {
         f_log "User $DEGREEWORKSUSER exists" green
     else
         f_log "User $DEGREEWORKSUSER does not exist!" red
-        exit 1
+        f_log "Please verify that dwuser exists!" red
+        return 
     fi
 }
 
