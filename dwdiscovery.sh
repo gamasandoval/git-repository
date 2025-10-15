@@ -81,7 +81,7 @@ check_args() {
 
 check_os() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-------------- OS INFO ----------------------"
 
     f_log "Gathering OS information..."
     f_log "Hostname: $(hostname)"
@@ -98,7 +98,7 @@ check_filesystems() {
 
 check_fs_usage() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-------------- FS INFO ----------------------"
 
     f_log "Checking filesystem usage..."
     local threshold=$THRESHOLD
@@ -119,7 +119,7 @@ check_storage() {
 
 check_dw_version() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-------------- DW VERSION -------------------"
 
     f_log "Checking DegreeWorks version..."
     DWVERSION=$(su - "$DEGREEWORKSUSER" -c 'echo $DWRELEASE' 2>/dev/null | tail -n1)
@@ -131,6 +131,8 @@ check_dw_version() {
 }
 
 check_dgwbase() {
+    f_log "---------------------------------------------"
+    f_log "--------------  DW BASE ---------------------"
     f_log "Checking DGWBASE variable..."
     DGWBASE=$(su - "$DEGREEWORKSUSER" -c 'echo $DGWBASE' 2>/dev/null | tail -n1)
     if [[ -n "$DGWBASE" ]]; then
@@ -142,7 +144,7 @@ check_dgwbase() {
 
 check_server_type() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-------------- SERVER TYPE ------------------"
     f_log "Detecting server type (Classic vs Web vs Hybrid)..."
 
     HTTPD_PROCS=$(ps -u "$DEGREEWORKSUSER" -f | grep -i '.jar' | grep -iE "Responsive|Dashboard|Controller|API|Transit" | grep -iv "jenkins")
@@ -164,6 +166,8 @@ check_server_type() {
 ###########################
 
 check_rabbitmq_status() {
+    f_log "---------------------------------------------"
+    f_log "------------ RABBIT MQ STATUS ---------------"
     f_log "Checking RabbitMQ service status..."
     if systemctl is-active --quiet rabbitmq-server; then
         f_log "RabbitMQ service is running" green
@@ -173,6 +177,8 @@ check_rabbitmq_status() {
 }
 
 check_rabbitmq_server_version() {
+    f_log "---------------------------------------------"
+    f_log "------------ RABBIT MQ VERSION --------------"
     f_log "Getting RabbitMQ server version..."
     if command -v rabbitmqctl &>/dev/null; then
         RABBIT_VERSION=$(rabbitmqctl version 2>/dev/null)
@@ -183,6 +189,8 @@ check_rabbitmq_server_version() {
 }
 
 check_rabbitmq_client_versions() {
+    f_log "---------------------------------------------"
+    f_log "------------ RABBIT MQ CLIENT  --------------"
     f_log "Checking RabbitMQ client installations under /opt..."
     if [[ -d /opt ]]; then
         CLIENT_DIRS=$(ls -d /opt/rabbitmq-c-* 2>/dev/null)
@@ -208,7 +216,7 @@ check_java_version() {
 
 check_apache_fop() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "------------------    FOP   -----------------"
     f_log "Checking Apache FOP..."
     FOP_PATH=$(su - "$DEGREEWORKSUSER" -c 'which fop' 2>/dev/null)
     if [[ -n "$FOP_PATH" ]]; then
@@ -220,7 +228,7 @@ check_apache_fop() {
 
 check_gcc() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "------------------    GCC   -----------------"
     f_log "Checking GCC version..."
     if command -v gcc &>/dev/null; then
         GCC_VER=$(gcc -v 2>&1 | grep "gcc version" | head -n 1)
@@ -232,7 +240,7 @@ check_gcc() {
 
 check_openssl() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "----------------   OPENSSL  -----------------"
     f_log "Checking OpenSSL version..."
     if command -v openssl &>/dev/null; then
         OPENSSL_VER=$(openssl version 2>/dev/null)
@@ -244,7 +252,7 @@ check_openssl() {
 
 check_perl() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "----------------    PERL    -----------------"
     f_log "Checking Perl version..."
     if command -v perl &>/dev/null; then
         PERL_VER=$(perl -e 'printf "%vd\n", $^V' 2>/dev/null)
@@ -256,14 +264,14 @@ check_perl() {
 
 list_cronjobs() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "----------------  CRONJOBS  -----------------"
     f_log "Listing cron jobs for $DEGREEWORKSUSER..."
     crontab -u "$DEGREEWORKSUSER" -l 2>/dev/null
 }
 
 check_dw_base_commands() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "--------  DW (web,tbe,dap,req,res)  ---------"
     f_log "Checking DW base commands as $DEGREEWORKSUSER..."
 
     # Only run on Classic or Hybrid servers
@@ -317,7 +325,7 @@ check_dw_base_commands() {
 
 rmqtest() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-----------      RMQTEST   ------------------"
     f_log "Running rmqtest as $DEGREEWORKSUSER..."
 
     # Run rmqtest as dwuser
@@ -344,7 +352,7 @@ rmqtest() {
 # --- BUILDALL Function ---
 check_build_all() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "------------   BUILD ALL  -------------------"
     if [[ "$BUILDALL_FLAG" == "yes" ]]; then
         f_log "Running BuildAll command as $DEGREEWORKSUSER..."
         
@@ -378,7 +386,7 @@ check_build_all() {
 # --- Review logs Function ---
 check_dw_logs() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "--------------    LOGS   --------------------"
     f_log "Checking recent DW logs..."
 
     # Only applies to Classic and Hybrid servers
@@ -407,7 +415,7 @@ check_dw_logs() {
     # --- Web log ---
     if [[ -n "$WEB_LOG_FILE" && -f "$WEB_LOG_FILE" ]]; then
         f_log "---------------------------------------------"
-        f_log "---------------------------------------------"
+        f_log "------------   WEB LOG   --------------------"
         f_log "===== Last 50 lines of $(basename "$WEB_LOG_FILE") ====="
         su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null
         if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
@@ -420,7 +428,7 @@ check_dw_logs() {
     # --- Transit log ---
     if [[ -n "$TRANSIT_LOG_FILE" && -f "$TRANSIT_LOG_FILE" ]]; then
         f_log "---------------------------------------------"
-        f_log "---------------------------------------------"
+        f_log "---------------  TBE LOG   ------------------"
         f_log "===== Last 50 lines of $(basename "$TRANSIT_LOG_FILE") ====="
         su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null
         if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
@@ -436,7 +444,7 @@ check_dw_logs() {
 # --- Check validity of jks ssl file ---
 check_dw_jks_certificate() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "------------      SSL JKS   -----------------"
     f_log "Checking JKS certificate validity..."
 
     # Get JKS path and password from dwenv.config
@@ -512,7 +520,7 @@ check_dw_jks_certificate() {
 ###########################
 check_dw_db() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "------------- DW DB jdbcverify  -------------"
     f_log "Checking DW database connection..."
     DB_OUTPUT=$(su - "$DEGREEWORKSUSER" -c 'jdbcverify --verbose' 2>&1)
     DB_EXIT=$?
@@ -523,7 +531,7 @@ check_dw_db() {
 
 check_db_version() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-----------  DW DB VERSION  ------------------"
     f_log "Checking DW database version..."
 
     TMP_DB_FILE="/tmp/OracleDB_$$.txt"
@@ -545,7 +553,7 @@ check_db_version() {
 
 check_blob_conversion() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-------------- BLOB COUNT--------------------"
     f_log "Checking BLOB conversion..."
     SQL_NON_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO!='BLOB';"
     SQL_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO='BLOB';"
@@ -556,7 +564,7 @@ check_blob_conversion() {
 
 check_duplicate_exceptions() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "----------  EXCEPTIONS COUNT ----------------"
     f_log "Checking Duplicate exceptions..."
     SQL="select dap_stu_id, dap_exc_num, count(*) cnt from dap_except_dtl group by dap_stu_id,dap_exc_num having count(*)>1 order by 1,2;"
     OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL\"" 2>/dev/null)
@@ -566,7 +574,7 @@ check_duplicate_exceptions() {
 
 check_duplicate_notes() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "----------   NOTES COUNT   ------------------"
     f_log "Checking Duplicate Notes..."
     SQL="select dap_stu_id, dap_note_num, count(*) cnt from dap_note_dtl group by dap_stu_id,dap_note_num having count(*)>1 order by 1,2;"
     OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL\"" 2>/dev/null)
@@ -576,7 +584,7 @@ check_duplicate_notes() {
 
 check_dw_db_connections() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "-----------  DW DB CONNECTIONS --------------"
     f_log "Checking DW database connections (db, dbb, dbt)..."
 
     # Declare associative array to store connection results
@@ -605,7 +613,7 @@ check_dw_db_connections() {
 #Web/Hybrid functions
 list_dw_jar_files() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "--------------  JAVA JAR FILES --------------"
     f_log "Listing DW-related Java JAR files for $SERVER_TYPE server..."
 
     if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
@@ -625,7 +633,7 @@ list_dw_jar_files() {
 
 get_dw_jar_versions() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "---------- JAVA JAR FILES VERSION -----------"
     f_log "Getting DW JAR versions..."
 
     if [[ "$SERVER_TYPE" != "Web" && "$SERVER_TYPE" != "Hybrid" ]]; then
@@ -644,7 +652,7 @@ get_dw_jar_versions() {
 
 check_httpd_processes() {
     f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
+    f_log "----------   APACHE HTTPD  ------------------"
     f_log "Checking for Apache/httpd processes..."
     HTTPD_PROCS=$(ps -ef | grep -iE "httpd|apache" | grep -v grep)
     if [[ -n "$HTTPD_PROCS" ]]; then
