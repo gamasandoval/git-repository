@@ -5,7 +5,7 @@
 # Args:          degreeworksuser [--sql] [--buildall] [--log]
 # Author:        G. Sandoval
 # Date:          10.07.2025
-# Version:       1.15
+# Version:       1.16
 #########################################################################
 
 ####### VARIABLES SECTION #######
@@ -544,6 +544,8 @@ check_db_version() {
 }
 
 check_blob_conversion() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
     f_log "Checking BLOB conversion..."
     SQL_NON_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO!='BLOB';"
     SQL_BLOB="select count(*) from DAP_AUDIT_DTL where DAP_CREATE_WHO='BLOB';"
@@ -553,6 +555,9 @@ check_blob_conversion() {
 }
 
 check_duplicate_exceptions() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+    f_log "Checking Duplicate exceptions..."
     SQL="select dap_stu_id, dap_exc_num, count(*) cnt from dap_except_dtl group by dap_stu_id,dap_exc_num having count(*)>1 order by 1,2;"
     OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL\"" 2>/dev/null)
     DUP_EXCEPTIONS_STATUS=$(echo "$OUTPUT" | grep -v -E '^$|^runsql:' | wc -l)
@@ -560,11 +565,42 @@ check_duplicate_exceptions() {
 }
 
 check_duplicate_notes() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+    f_log "Checking Duplicate Notes..."
     SQL="select dap_stu_id, dap_note_num, count(*) cnt from dap_note_dtl group by dap_stu_id,dap_note_num having count(*)>1 order by 1,2;"
     OUTPUT=$(su - "$DEGREEWORKSUSER" -c "runsql \"$SQL\"" 2>/dev/null)
     DUP_NOTES_STATUS=$(echo "$OUTPUT" | grep -v -E '^$|^runsql:' | wc -l)
     f_log "Duplicate notes: $DUP_NOTES_STATUS"
 }
+
+check_dw_db_connections() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+    f_log "Checking DW database connections (db, dbb, dbt)..."
+
+    # Declare associative array to store connection results
+    declare -gA DB_COMMAND_STATUS
+    DB_COMMANDS=("db" "dbb" "dbt")
+
+    for cmd in "${DB_COMMANDS[@]}"; do
+        # Run each DB command as dwuser
+        OUTPUT=$(echo "exit" | su - "$DEGREEWORKSUSER" -c "$cmd" 2>&1)
+
+        # Check for connection success
+        if echo "$OUTPUT" | grep -qi "Connected to"; then
+            DB_COMMAND_STATUS["$cmd"]="Success"
+        else
+            DB_COMMAND_STATUS["$cmd"]="DB connection error"
+        fi
+
+        # Print live output
+        f_log "Output from $cmd:" green
+        echo "$OUTPUT"
+    done
+
+}
+
 
 #Web/Hybrid functions
 list_dw_jar_files() {
@@ -647,6 +683,11 @@ print_summary() {
         if [[ "$SQL_FLAG" == "yes" ]]; then
             printf "%-25s : %s\n" "DW DB Connection" "${DB_EXIT_STATUS:-Not checked}"
             printf "%-25s : %s\n" "DW DB Version" "${DB_VERSION:-None}"
+            
+            printf "%-25s : %s\n" "DW DB Connections" ""
+        for db in "${!DB_COMMAND_STATUS[@]}"; do
+            printf "  %-23s : %s\n" "$db" "${DB_COMMAND_STATUS[$db]}"
+        done
             printf "%-25s : %s\n" "BLOB Count NonBlob" "${COUNT_NON_BLOB:-0}"
             printf "%-25s : %s\n" "BLOB Count Blob" "${COUNT_BLOB:-0}"
             printf "%-25s : %s\n" "Duplicate Exceptions" "${DUP_EXCEPTIONS_STATUS:-None}"
@@ -723,6 +764,7 @@ check_server_type
         if [[ "$SQL_FLAG" == "yes"  ]]; then
             check_dw_db
             check_db_version
+            check_dw_db_connections
             check_blob_conversion
             check_duplicate_exceptions
             check_duplicate_notes
