@@ -5,7 +5,7 @@
 # Args:          degreeworksuser [--sql] [--buildall] [--log]
 # Author:        G. Sandoval
 # Date:          10.07.2025
-# Version:       1.14
+# Version:       1.15
 #########################################################################
 
 ####### VARIABLES SECTION #######
@@ -159,8 +159,10 @@ check_server_type() {
     fi
     f_log "Detected server type: $SERVER_TYPE"
 }
+###########################
+#  BASIC CLASSIC/HYBRID FUNCTIONS 
+###########################
 
-# --- BASIC CLASSIC/HYBRID FUNCTIONS ---
 check_rabbitmq_status() {
     f_log "Checking RabbitMQ service status..."
     if systemctl is-active --quiet rabbitmq-server; then
@@ -339,6 +341,171 @@ rmqtest() {
         RMQTEST_STATUS="Failed"
     fi
 }
+# --- BUILDALL Function ---
+check_build_all() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+    if [[ "$BUILDALL_FLAG" == "yes" ]]; then
+        f_log "Running BuildAll command as $DEGREEWORKSUSER..."
+        
+        # Run build all with timeout of 5 minutes (300s) and capture output live
+        TMP_BUILD_FILE="/tmp/buildall_$$.log"
+        timeout 300 su - "$DEGREEWORKSUSER" -c "build all" | tee "$TMP_BUILD_FILE"
+        EXIT_CODE=${PIPESTATUS[0]}
+
+        # Check if timed out
+        if [[ $EXIT_CODE -eq 124 ]]; then
+            f_log "BuildAll did not complete successfully (Timed out)" red
+            BUILD_SUCCESS="Timed out"
+            BUILD_FAIL="Timed out"
+        else
+            # Extract success/failure counts from log
+            BUILD_SUCCESS=$(grep -i "Success count" "$TMP_BUILD_FILE" | tail -n2 | grep -oE '[0-9]+')
+            BUILD_FAIL=$(grep -i "Failure count" "$TMP_BUILD_FILE" | tail -n2 | grep -oE '[0-9]+')
+            f_log "BuildAll completed. Success: $BUILD_SUCCESS, Failure: $BUILD_FAIL" green
+        fi
+
+        # Clean up temporary log
+        rm -f "$TMP_BUILD_FILE"
+
+    else
+        f_log "BuildAll checks were skipped (--buildall not used)" yellow
+        BUILD_SUCCESS=0
+        BUILD_FAIL=0
+    fi
+}
+
+# --- Review logs Function ---
+check_dw_logs() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+    f_log "Checking recent DW logs..."
+
+    # Only applies to Classic and Hybrid servers
+    if [[ "$SERVER_TYPE" != "Classic" && "$SERVER_TYPE" != "Hybrid" ]]; then
+        f_log "Skipping DW log check (not applicable for Web servers)"
+        return
+    fi
+
+    LOG_DIR="$DGWBASE/admin/logdebug"
+    WEB_LOG_FILE=""
+    TRANSIT_LOG_FILE=""
+
+    # Find latest web.log*
+    if ls "$LOG_DIR"/web.log* >/dev/null 2>&1; then
+        WEB_LOG_FILE=$(ls -1t "$LOG_DIR"/web.log* 2>/dev/null | head -n 1)
+    fi
+
+    # Find latest transitexecutor.log*
+    if ls "$LOG_DIR"/transitexecutor.log* >/dev/null 2>&1; then
+        TRANSIT_LOG_FILE=$(ls -1t "$LOG_DIR"/transitexecutor.log* 2>/dev/null | head -n 1)
+    fi
+
+    WEB_ERRORS="Not found"
+    TRANSIT_ERRORS="Not found"
+
+    # --- Web log ---
+    if [[ -n "$WEB_LOG_FILE" && -f "$WEB_LOG_FILE" ]]; then
+        f_log "---------------------------------------------"
+        f_log "---------------------------------------------"
+        f_log "===== Last 50 lines of $(basename "$WEB_LOG_FILE") ====="
+        su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null
+        if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
+            WEB_ERRORS="Yes"
+        else
+            WEB_ERRORS="No"
+        fi
+    fi
+
+    # --- Transit log ---
+    if [[ -n "$TRANSIT_LOG_FILE" && -f "$TRANSIT_LOG_FILE" ]]; then
+        f_log "---------------------------------------------"
+        f_log "---------------------------------------------"
+        f_log "===== Last 50 lines of $(basename "$TRANSIT_LOG_FILE") ====="
+        su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null
+        if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
+            TRANSIT_ERRORS="Yes"
+        else
+            TRANSIT_ERRORS="No"
+        fi
+    fi
+
+}
+
+ # --- Check validity of jks ssl file ---
+# --- Check validity of jks ssl file ---
+check_dw_jks_certificate() {
+    f_log "---------------------------------------------"
+    f_log "---------------------------------------------"
+    f_log "Checking JKS certificate validity..."
+
+    # Get JKS path and password from dwenv.config
+    JKS_PATH=$(su - "$DEGREEWORKSUSER" -c "grep -i '^SERVER_SSL_KEY_STORE=' \"$DGWBASE/dwenv.config\" | cut -d'=' -f2 | tr -d '\"'" 2>/dev/null)
+    JKS_PASS=$(su - "$DEGREEWORKSUSER" -c "grep -i '^SERVER_SSL_KEY_STORE_PASSWORD=' \"$DGWBASE/dwenv.config\" | cut -d'=' -f2 | tr -d '\"'" 2>/dev/null)
+
+    # Default values if not found
+    if [[ -z "$JKS_PATH" ]]; then
+        f_log "No JKS file found in dwenv.config" red
+        JKS_STATUS="NA"
+        return
+    fi
+    if [[ -z "$JKS_PASS" ]]; then
+        JKS_PASS="changeit"
+        f_log "JKS password not found, using default 'changeit'"
+    fi
+
+    f_log "JKS File: $JKS_PATH"
+
+    # Check that file exists
+    if [[ ! -f "$JKS_PATH" ]]; then
+        f_log "JKS file does not exist: $JKS_PATH" red
+        JKS_STATUS="NA"
+        return
+    fi
+
+    # Extract certificate validity lines
+    CERT_INFO=$(su - "$DEGREEWORKSUSER" -c "keytool -list -v -keystore \"$JKS_PATH\" -storepass \"$JKS_PASS\" 2>/dev/null | grep -E 'Valid from:|until:'")
+
+    if [[ -z "$CERT_INFO" ]]; then
+        f_log "Could not read certificate info from JKS file" red
+        JKS_STATUS="NA"
+        return
+    fi
+
+    # Print live output (all certificates)
+    echo "$CERT_INFO" | while read -r line; do f_log "$line"; done
+
+    # --- Extract latest expiration date (furthest in future) ---
+    UNTIL_DATE=$(echo "$CERT_INFO" | grep -i "until:" | sed 's/.*until: //' | sort -r | head -n1)
+
+    if [[ -z "$UNTIL_DATE" ]]; then
+        f_log "Could not extract expiration date from certificate info" red
+        JKS_STATUS="NA"
+        return
+    fi
+
+    # Convert to epoch safely (ignore locale issues)
+    CURRENT_EPOCH=$(date +%s)
+    UNTIL_EPOCH=$(LC_ALL=C date -d "$UNTIL_DATE" +%s 2>/dev/null)
+
+    if [[ -z "$UNTIL_EPOCH" ]]; then
+        f_log "Could not parse certificate expiration date" red
+        JKS_STATUS="NA"
+        return
+    fi
+
+    # Compare and report
+    if (( CURRENT_EPOCH > UNTIL_EPOCH )); then
+        f_log "JKS certificate expired on: $UNTIL_DATE" red
+        JKS_STATUS="Not valid (expired: $UNTIL_DATE)"
+    else
+        f_log "JKS certificate valid until: $UNTIL_DATE" green
+        JKS_STATUS="Valid (until: $UNTIL_DATE)"
+    fi
+}
+
+
+
 
 ###########################
 # SQL Functions
@@ -452,96 +619,7 @@ check_httpd_processes() {
     fi
 }
 
-# --- BUILDALL Function ---
-check_build_all() {
-    f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
-    if [[ "$BUILDALL_FLAG" == "yes" ]]; then
-        f_log "Running BuildAll command as $DEGREEWORKSUSER..."
-        
-        # Run build all with timeout of 5 minutes (300s) and capture output live
-        TMP_BUILD_FILE="/tmp/buildall_$$.log"
-        timeout 300 su - "$DEGREEWORKSUSER" -c "build all" | tee "$TMP_BUILD_FILE"
-        EXIT_CODE=${PIPESTATUS[0]}
 
-        # Check if timed out
-        if [[ $EXIT_CODE -eq 124 ]]; then
-            f_log "BuildAll did not complete successfully (Timed out)" red
-            BUILD_SUCCESS="Timed out"
-            BUILD_FAIL="Timed out"
-        else
-            # Extract success/failure counts from log
-            BUILD_SUCCESS=$(grep -i "Success count" "$TMP_BUILD_FILE" | tail -n2 | grep -oE '[0-9]+')
-            BUILD_FAIL=$(grep -i "Failure count" "$TMP_BUILD_FILE" | tail -n2 | grep -oE '[0-9]+')
-            f_log "BuildAll completed. Success: $BUILD_SUCCESS, Failure: $BUILD_FAIL" green
-        fi
-
-        # Clean up temporary log
-        rm -f "$TMP_BUILD_FILE"
-
-    else
-        f_log "BuildAll checks were skipped (--buildall not used)" yellow
-        BUILD_SUCCESS=0
-        BUILD_FAIL=0
-    fi
-}
-
-# --- Review logs Function ---
-check_dw_logs() {
-    f_log "---------------------------------------------"
-    f_log "---------------------------------------------"
-    f_log "Checking recent DW logs..."
-
-    # Only applies to Classic and Hybrid servers
-    if [[ "$SERVER_TYPE" != "Classic" && "$SERVER_TYPE" != "Hybrid" ]]; then
-        f_log "Skipping DW log check (not applicable for Web servers)"
-        return
-    fi
-
-    LOG_DIR="$DGWBASE/admin/logdebug"
-    WEB_LOG_FILE=""
-    TRANSIT_LOG_FILE=""
-
-    # Find latest web.log*
-    if ls "$LOG_DIR"/web.log* >/dev/null 2>&1; then
-        WEB_LOG_FILE=$(ls -1t "$LOG_DIR"/web.log* 2>/dev/null | head -n 1)
-    fi
-
-    # Find latest transitexecutor.log*
-    if ls "$LOG_DIR"/transitexecutor.log* >/dev/null 2>&1; then
-        TRANSIT_LOG_FILE=$(ls -1t "$LOG_DIR"/transitexecutor.log* 2>/dev/null | head -n 1)
-    fi
-
-    WEB_ERRORS="Not found"
-    TRANSIT_ERRORS="Not found"
-
-    # --- Web log ---
-    if [[ -n "$WEB_LOG_FILE" && -f "$WEB_LOG_FILE" ]]; then
-        f_log "---------------------------------------------"
-        f_log "---------------------------------------------"
-        f_log "===== Last 50 lines of $(basename "$WEB_LOG_FILE") ====="
-        su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null
-        if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$WEB_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
-            WEB_ERRORS="Yes"
-        else
-            WEB_ERRORS="No"
-        fi
-    fi
-
-    # --- Transit log ---
-    if [[ -n "$TRANSIT_LOG_FILE" && -f "$TRANSIT_LOG_FILE" ]]; then
-        f_log "---------------------------------------------"
-        f_log "---------------------------------------------"
-        f_log "===== Last 50 lines of $(basename "$TRANSIT_LOG_FILE") ====="
-        su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null
-        if su - "$DEGREEWORKSUSER" -c "tail -n 50 \"$TRANSIT_LOG_FILE\"" 2>/dev/null | grep -Ei 'error|exception|failed|traceback' >/dev/null; then
-            TRANSIT_ERRORS="Yes"
-        else
-            TRANSIT_ERRORS="No"
-        fi
-    fi
-
-}
 
 ###########################
 # Summary Function
@@ -564,6 +642,7 @@ print_summary() {
         done
 
         printf "%-25s : %s\n" "RMQ Test" "$RMQTEST_STATUS"
+        printf "%-25s : %s\n" "JKS SSL Certificate" "${JKS_STATUS:-NA}"
 
         if [[ "$SQL_FLAG" == "yes" ]]; then
             printf "%-25s : %s\n" "DW DB Connection" "${DB_EXIT_STATUS:-Not checked}"
@@ -638,6 +717,7 @@ check_server_type
     list_cronjobs
     check_dw_base_commands
     rmqtest
+    check_dw_jks_certificate
 
         # SQL checks if flag enabled
         if [[ "$SQL_FLAG" == "yes"  ]]; then
