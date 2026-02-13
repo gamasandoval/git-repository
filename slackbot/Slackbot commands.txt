@@ -3,10 +3,6 @@
 cd /home/mobaxterm/BOX/Code/slackbot
 python appctl_slack.py
 
-export SLACK_BOT_TOKEN="xoxb-4936334678-10499024909890-LeK1uINKBI2djPFEHcQqNiY2"
-export SLACK_APP_TOKEN="xapp-1-A0AENUF941G-10498977502850-82706694080b64eec796067ca8d59b17a26b7fcaf113a033d74b02f4942d38c9"
-export APPCTL_BIN="/home/mobaxterm/BOX/Code/slackbot/bin/appctl"
-
 Test (no args)
 /appctl
 /appctl status PRCC it-s-banethos-t
