@@ -1,0 +1,359 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INV_DIR="$ROOT_DIR/inventory"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+usage() {
+cat <<'EOF'
+Usage:
+  appctl <cmd> <CLIENT> <HOST|ENV> <APP> [args...] [--all] [--exec]
+
+Commands:
+  info
+  status
+  logs <logname> [--lines N] [--filter REGEX]
+  journal [--lines N]
+  url
+  start
+  stop
+  restart
+
+Modes:
+  (default) print commands only (no SSH)
+  --exec    run via SSH (non-interactive only). No password prompts expected.
+
+Environment targeting:
+  - The 3rd arg may be a host (e.g. it-s-banethos-t) OR an environment (e.g. TEST).
+  - If ENV matches one host: it will be used automatically.
+  - If ENV matches multiple hosts: appctl prints candidates and exits,
+    unless you add --all (then it runs against all matching hosts).
+
+Execution model:
+  - All remote commands run as the inventory run_as_user (e.g., tomcat) via:
+      sudo -u <run_as_user> bash -lc '<cmd>'
+  - systemctl is executed as root but invoked by run_as_user:
+      sudo -n /bin/systemctl <action> tc_TEST*.service
+
+Examples:
+  appctl info PRCC TEST BEP
+  appctl status PRCC TEST BEP --exec
+  appctl logs PRCC TEST BEP catalina --lines 50 --exec
+  appctl restart PRCC TEST BEP --exec
+EOF
+}
+
+# ---- Parse leading args ----
+[[ $# -ge 1 ]] || { usage; exit 1; }
+CMD="$1"; shift || true
+
+[[ $# -ge 3 ]] || { usage; exit 1; }
+CLIENT_RAW="$1"; shift
+IDENT="$1"; shift   # HOST or ENV
+APP="$1"; shift
+
+CLIENT="$(echo "$CLIENT_RAW" | tr '[:upper:]' '[:lower:]')"
+INV_FILE="$INV_DIR/${CLIENT}.json"
+[[ -f "$INV_FILE" ]] || die "Inventory not found: $INV_FILE"
+
+# ---- Parse options anywhere in remaining args ----
+ALL_MODE="no"
+EXEC_MODE="print"   # print | exec
+OTHER_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all) ALL_MODE="yes"; shift ;;
+    --exec) EXEC_MODE="exec"; shift ;;
+    --exec-tty) die "--exec-tty is not supported anymore. Use --exec." ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) OTHER_ARGS+=("$1"); shift ;;
+  esac
+done
+
+# ---- Resolve IDENT => host(s) ----
+hosts_for_env() {
+  local wanted="$1"
+  local wanted_lc
+  wanted_lc="$(echo "$wanted" | tr '[:upper:]' '[:lower:]' | sed 's/[[:space:]]\+$//')"
+
+  jq -r '.hosts | to_entries[] | "\(.key)\t\(.value.environment // "")"' "$INV_FILE" \
+  | while IFS=$'\t' read -r host env; do
+      env="$(echo "$env" | sed 's/^[[:space:]]\+//; s/[[:space:]]\+$//')"
+      env_lc="$(echo "$env" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$env_lc" == "$wanted_lc" ]]; then
+        echo "$host"
+      fi
+    done
+}
+
+IDENT_IS_HOST="no"
+TARGET_HOSTS=()
+
+if jq -e ".hosts[\"$IDENT\"]" "$INV_FILE" >/dev/null 2>&1; then
+  IDENT_IS_HOST="yes"
+  TARGET_HOSTS=("$IDENT")
+else
+  mapfile -t env_hosts < <(hosts_for_env "$IDENT")
+  if [[ ${#env_hosts[@]} -eq 0 ]]; then
+    die "Neither host '$IDENT' exists nor environment '$IDENT' matches any host in this inventory."
+  fi
+  TARGET_HOSTS=("${env_hosts[@]}")
+fi
+
+if [[ "$IDENT_IS_HOST" != "yes" && ${#TARGET_HOSTS[@]} -gt 1 && "$ALL_MODE" != "yes" ]]; then
+  echo "The identifier '$IDENT' matches multiple hosts for client '$CLIENT_RAW':"
+  for h in "${TARGET_HOSTS[@]}"; do
+    env_val="$(jq -r ".hosts[\"$h\"].environment // \"<missing>\"" "$INV_FILE")"
+    desc="$(jq -r ".hosts[\"$h\"].description // \"<no description>\"" "$INV_FILE")"
+    echo "  - $h (env: $env_val) - $desc"
+  done
+  echo
+  echo "Run again with a specific host, e.g.:"
+  echo "  appctl $CMD $CLIENT_RAW ${TARGET_HOSTS[0]} $APP ${OTHER_ARGS[*]}"
+  echo
+  echo "Or run against all hosts in the environment with --all, e.g.:"
+  echo "  appctl $CMD $CLIENT_RAW $IDENT $APP ${OTHER_ARGS[*]} --all --exec"
+  exit 0
+fi
+
+# ---- SSH helpers ----
+SSH_OPTS=(
+  -o BatchMode=yes
+  -o ConnectTimeout=10
+  -o StrictHostKeyChecking=accept-new
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=2
+  -o LogLevel=ERROR
+)
+
+run_for_host() {
+  local HOST="$1"
+
+  jq -e ".hosts[\"$HOST\"]" "$INV_FILE" >/dev/null || die "Host '$HOST' not found in inventory."
+  jq -e ".hosts[\"$HOST\"].apps[\"$APP\"]" "$INV_FILE" >/dev/null || die "App '$APP' not found on host '$HOST'."
+
+  local CLIENT_NAME ENVIRONMENT SERVICE_UNIT BASE_DIR PORT RUN_AS_USER
+  CLIENT_NAME="$(jq -r ".client_name" "$INV_FILE")"
+  ENVIRONMENT="$(jq -r ".hosts[\"$HOST\"].environment" "$INV_FILE")"
+  SERVICE_UNIT="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.service_unit" "$INV_FILE")"
+  BASE_DIR="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.base_dir" "$INV_FILE")"
+  PORT="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.port" "$INV_FILE")"
+  RUN_AS_USER="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.run_as_user // empty" "$INV_FILE")"
+
+  [[ -n "$RUN_AS_USER" ]] || die "run_as_user is not defined for $HOST/$APP (required)."
+
+  local SSH_TARGET="${MW_SSH_TARGET:-$HOST}"
+
+  header() {
+    echo "--------------------------------------------"
+    echo "Client : $CLIENT_NAME"
+    echo "Host   : $HOST"
+    echo "Env    : $ENVIRONMENT"
+    echo "App    : $APP"
+    echo "Service: $SERVICE_UNIT"
+    echo "RunAs  : $RUN_AS_USER"
+    echo "--------------------------------------------"
+    echo
+  }
+
+  run_ssh() {
+    local cmd="$1"
+    local wrapped="export SYSTEMD_PAGER=cat; export PAGER=cat; $cmd"
+    ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "bash -lc $(printf '%q' "$wrapped")"
+  }
+
+  # Run any command as RUN_AS_USER (passwordless expected based on sudoers setup).
+  as_runas_user() {
+    local cmd="$1"
+    echo "sudo -u $RUN_AS_USER bash -lc $(printf '%q' "$cmd")"
+  }
+
+  # Run systemctl as root but invoked by RUN_AS_USER (tomcat has NOPASSWD for tc_TEST*.service).
+  sysctl() {
+    local action="$1"
+    local unit="$2"
+    echo "$(as_runas_user "sudo -n /bin/systemctl $action $unit")"
+  }
+
+  exec_or_print() {
+    local remote_cmd="$1"
+
+    if [[ "$EXEC_MODE" == "print" ]]; then
+      header
+      echo "Run on server:"
+      echo "  $remote_cmd"
+      return 0
+    fi
+
+    header
+    echo "Executing via SSH on: $SSH_TARGET"
+    echo
+
+    local out=""
+    if ! out="$(run_ssh "$remote_cmd" 2>&1)"; then
+      echo "$out"
+      echo
+      echo "Hint: This tool runs in non-interactive mode. Ensure sudoers allow required commands without password."
+      return 1
+    fi
+    echo "$out"
+  }
+
+  case "$CMD" in
+    info)
+      header
+      echo "Base Dir : $BASE_DIR"
+      echo "Port     : $PORT"
+      echo "Run As   : $RUN_AS_USER"
+      echo
+      echo "Available logs:"
+      jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.logs | keys[]" "$INV_FILE" | sed 's/^/  - /'
+      ;;
+
+    status)
+      local cmd_status cmd_active cmd_ports
+      cmd_status="$(sysctl status "$SERVICE_UNIT")"
+      cmd_active="$(sysctl is-active "$SERVICE_UNIT")"
+      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep $PORT || true")"
+      exec_or_print "$cmd_status; echo; $cmd_active; echo; $cmd_ports"
+      ;;
+
+    logs)
+      [[ ${#OTHER_ARGS[@]} -ge 1 ]] || die "Missing <logname> for 'logs' command."
+      local LOGNAME="${OTHER_ARGS[0]}"
+
+      local LINES=200
+      local FILTER=""
+      local i=1
+      while [[ $i -lt ${#OTHER_ARGS[@]} ]]; do
+        case "${OTHER_ARGS[$i]}" in
+          --lines) i=$((i+1)); LINES="${OTHER_ARGS[$i]:-200}" ;;
+          --filter) i=$((i+1)); FILTER="${OTHER_ARGS[$i]:-}" ;;
+        esac
+        i=$((i+1))
+      done
+
+      local LOGPATH
+      LOGPATH="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.logs[\"$LOGNAME\"] // empty" "$INV_FILE")"
+      [[ -n "$LOGPATH" ]] || die "Log '$LOGNAME' not found for $HOST/$APP."
+
+      if [[ -n "$FILTER" ]]; then
+        exec_or_print "$(as_runas_user "tail -n $LINES $LOGPATH | egrep -i \"$FILTER\" || true")"
+      else
+        exec_or_print "$(as_runas_user "tail -n $LINES $LOGPATH")"
+      fi
+      ;;
+
+    journal)
+      local LINES=200
+      local j=0
+      while [[ $j -lt ${#OTHER_ARGS[@]} ]]; do
+        if [[ "${OTHER_ARGS[$j]}" == "--lines" ]]; then
+          LINES="${OTHER_ARGS[$((j+1))]:-200}"
+        fi
+        j=$((j+1))
+      done
+      exec_or_print "$(as_runas_user "journalctl -u $SERVICE_UNIT -n $LINES --no-pager")"
+      ;;
+
+    url)
+      local URL
+      URL="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.url // empty" "$INV_FILE")"
+      if [[ -z "$URL" || "$URL" == "null" ]]; then
+        header
+        echo "No URL defined for this app."
+        return 0
+      fi
+
+      local remote_cmd
+      remote_cmd="$(as_runas_user "curl -s -o /dev/null -w \"%{http_code} %{time_total}\" -m 10 \"$URL\"")"
+
+      if [[ "$EXEC_MODE" == "print" ]]; then
+        header
+        echo "URL:"
+        echo "  $URL"
+        echo
+        echo "Test from server:"
+        echo "  $remote_cmd"
+        return 0
+      fi
+
+      header
+      echo "Executing via SSH on: $SSH_TARGET"
+      echo
+
+      local out=""
+      if ! out="$(run_ssh "$remote_cmd" 2>&1)"; then
+        echo "URL: $URL | ERROR: $out"
+        return 1
+      fi
+
+      local HTTP_CODE TIME_TOTAL
+      HTTP_CODE="$(echo "$out" | awk '{print $1}')"
+      TIME_TOTAL="$(echo "$out" | awk '{print $2}')"
+
+      local GREEN YELLOW RED NC COLOR
+      if [[ -t 1 ]]; then
+        GREEN=$'\033[0;32m'
+        YELLOW=$'\033[0;33m'
+        RED=$'\033[0;31m'
+        NC=$'\033[0m'
+      else
+        GREEN=""; YELLOW=""; RED=""; NC=""
+      fi
+
+      if [[ "$HTTP_CODE" =~ ^[0-9]+$ ]]; then
+        if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then COLOR="$GREEN"
+        elif [[ "$HTTP_CODE" -ge 300 && "$HTTP_CODE" -lt 400 ]]; then COLOR="$YELLOW"
+        else COLOR="$RED"; fi
+        echo "URL: $URL | ${COLOR}Status code: $HTTP_CODE${NC} | Time: ${TIME_TOTAL}s"
+      else
+        echo "URL: $URL | ERROR: $out"
+        return 1
+      fi
+      ;;
+
+    start)
+      local cmd_start cmd_verify cmd_ports
+      cmd_start="$(sysctl start "$SERVICE_UNIT")"
+      cmd_verify="$(sysctl is-active "$SERVICE_UNIT")"
+      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep $PORT || true")"
+      exec_or_print "$cmd_start; echo; echo Verifying...; $cmd_verify; echo; $cmd_ports"
+      ;;
+
+    stop)
+      local cmd_stop cmd_verify
+      cmd_stop="$(sysctl stop "$SERVICE_UNIT")"
+      cmd_verify="$(sysctl is-active "$SERVICE_UNIT")"
+      exec_or_print "$cmd_stop; echo; echo Verifying...; $cmd_verify"
+      ;;
+
+    restart)
+      local cmd_restart cmd_verify cmd_ports
+      cmd_restart="$(sysctl restart "$SERVICE_UNIT")"
+      cmd_verify="$(sysctl is-active "$SERVICE_UNIT")"
+      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep $PORT || true")"
+      exec_or_print "$cmd_restart; echo; echo Verifying...; $cmd_verify; echo; $cmd_ports"
+      ;;
+
+    *)
+      usage
+      die "Unknown command: $CMD"
+      ;;
+  esac
+}
+
+if [[ ${#TARGET_HOSTS[@]} -eq 1 ]]; then
+  run_for_host "${TARGET_HOSTS[0]}"
+else
+  for h in "${TARGET_HOSTS[@]}"; do
+    echo
+    echo "=============================="
+    echo " Running on host: $h"
+    echo "=============================="
+    run_for_host "$h"
+  done
+fi

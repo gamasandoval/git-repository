@@ -1,0 +1,52 @@
+xoxe.xoxp-1-Mi0yLTQ5MzYzMzQ2NzgtNDQzNDIwMTY2MTE1Mi0xMDUwMjM5MzYyMjY5Mi0xMDQ5NjcyNDI3NTczNC1kYjcwNzYwMWUyYjgxYTE4ODNlN2I4NThlYWNkMTUzM2ExNzhlYjcwMDU2YTAzMjg1YzY4YzA1NGI3MTI4ZjFj
+
+
+
+
+appctl-token
+xapp-1-A0AENUF941G-10498977502850-82706694080b64eec796067ca8d59b17a26b7fcaf113a033d74b02f4942d38c9
+
+OAuth Token
+xoxb-4936334678-10499024909890-LeK1uINKBI2djPFEHcQqNiY2
+
+
+cd /home/mobaxterm/BOX/Code/slackbot
+python appctl_slack.py
+
+export SLACK_BOT_TOKEN="xoxb-4936334678-10499024909890-LeK1uINKBI2djPFEHcQqNiY2"
+export SLACK_APP_TOKEN="xapp-1-A0AENUF941G-10498977502850-82706694080b64eec796067ca8d59b17a26b7fcaf113a033d74b02f4942d38c9"
+export APPCTL_BIN="/home/mobaxterm/BOX/Code/slackbot/bin/appctl"
+
+Test (no args)
+/appctl
+/appctl status PRCC it-s-banethos-t
+/appctl info PRCC it-s-banethos-t BEP
+/appctl info PRCC it-s-banethos-t EMA
+
+
+/appctl status PRCC it-s-banethos-t --exec-tty
+/appctl info PRCC it-s-banethos-t BEP
+/appctl info PRCC it-s-banethos-t EMA
+
+
+
+DEMO
+
+/appctl info PRCC it-s-banethos-t BEP
+
+/appctl status PRCC it-s-banethos-t BEP
+/appctl status PRCC it-s-banethos-t BEP --exec
+/appctl status PRCC TEST BEP --exec --raw
+
+/appctl status PRCC TEST BEP 
+/appctl status PRCC TEST BEP --exec 
+/appctl status PRCC TEST BEP --exec --raw
+
+
+/appctl status PRCC it-s-banethos-t BEP --exec-tty --raw
+
+/appctl info PRCC it-s-banethos-t BEP
+
+/appctl logs PRCC it-s-banethos-t BEP catalina --lines 50 --exec-tty
+
+/appctl status PRCC TEST BEP --exec-tty

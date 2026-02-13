@@ -1,0 +1,50 @@
+{
+  "client_id": "PRCC",
+  "client_name": "Pearl River Community College",
+  "os_family": "rhel8",
+  "defaults": {
+    "use_sudo": true,
+    "init_system": "systemd"
+  },
+  "hosts": {
+    "it-s-banethos-t": {
+      "environment": "TEST",
+      "description": "PRCC TEST - BanETHOS Tomcat host",
+      "init_system": "systemd",
+      "apps": {
+        "BEP": {
+          "display_name": "Banner Event Publisher",
+          "tomcat": {
+            "run_as_user": "tomcat",
+            "service_unit": "tc_TEST8080_bep.service",
+            "base_dir": "/u01/app/tomcat/tc_TEST8080_bep",
+            "port": 8080,
+            "logs": {
+              "catalina": "/u01/app/tomcat/tc_TEST8080_bep/logs/catalina.out",
+              "access": "/u01/app/tomcat/tc_TEST8080_bep/logs/localhost_access_log*.txt",
+              "event_summary": "/u01/app/tomcat/tc_TEST8080_bep/logs/bep_event_summary.log",
+              "event_publisher": "/u01/app/tomcat/tc_TEST8080_bep/logs/BannerEventPublisher.log"
+            },
+            "url": "http://it-s-banethos-t.prcc.local:8080/BannerEventPublisher/login/auth"
+          }
+        },
+        "EMA": {
+          "display_name": "Ellucian Messaging Adaptor",
+          "tomcat": {
+            "run_as_user": "tomcat",
+            "service_unit": "tc_TEST8081_ema.service",
+            "base_dir": "/u01/app/tomcat/tc_TEST8081_ema",
+            "port": 8081,
+            "logs": {
+              "catalina": "/u01/app/tomcat/tc_TEST8081_ema/logs/catalina.out",
+              "access": "/u01/app/tomcat/tc_TEST8081_ema/logs/localhost_access_log*.txt",
+              "ema_log": "/u01/app/tomcat/tc_TEST8081_ema/logs/ema.log"
+            },
+            "url": null
+          }
+        }
+      }
+    }
+  }
+}
+
