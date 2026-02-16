@@ -10,6 +10,7 @@ usage() {
 cat <<'EOF'
 Usage:
   appctl <cmd> <CLIENT> <HOST|ENV> <APP> [args...] [--all] [--exec]
+  appctl info <CLIENT> <HOST|ENV> [APP] [--all] [--exec]
 
 Commands:
   info
@@ -39,6 +40,8 @@ Execution model:
 
 Examples:
   appctl info PRCC TEST BEP
+  appctl info PRCC TEST
+  appctl info PRCC it-s-banethos-t
   appctl status PRCC TEST BEP --exec
   appctl logs PRCC TEST BEP catalina --lines 50 --exec
   appctl restart PRCC TEST BEP --exec
@@ -49,14 +52,29 @@ EOF
 [[ $# -ge 1 ]] || { usage; exit 1; }
 CMD="$1"; shift || true
 
-[[ $# -ge 3 ]] || { usage; exit 1; }
+# For info: require at least CLIENT + HOST|ENV (APP optional)
+# For others: require CLIENT + HOST|ENV + APP
+[[ $# -ge 2 ]] || { usage; exit 1; }
 CLIENT_RAW="$1"; shift
 IDENT="$1"; shift   # HOST or ENV
-APP="$1"; shift
+
+APP=""
+if [[ "$CMD" == "info" ]]; then
+  # info allows optional APP (if next token is not an option)
+  if [[ $# -ge 1 && "${1:0:2}" != "--" ]]; then
+    APP="$1"; shift
+  fi
+else
+  [[ $# -ge 1 ]] || { usage; die "Missing <APP> for command '$CMD'"; }
+  APP="$1"; shift
+fi
 
 CLIENT="$(echo "$CLIENT_RAW" | tr '[:upper:]' '[:lower:]')"
 INV_FILE="$INV_DIR/${CLIENT}.json"
 [[ -f "$INV_FILE" ]] || die "Inventory not found: $INV_FILE"
+
+# ---- Require jq ----
+command -v jq >/dev/null 2>&1 || die "jq is required but not found in PATH."
 
 # ---- Parse options anywhere in remaining args ----
 ALL_MODE="no"
@@ -92,9 +110,13 @@ hosts_for_env() {
 IDENT_IS_HOST="no"
 TARGET_HOSTS=()
 
+IDENT_LC="$(echo "$IDENT" | tr '[:upper:]' '[:lower:]')"
 if jq -e ".hosts[\"$IDENT\"]" "$INV_FILE" >/dev/null 2>&1; then
   IDENT_IS_HOST="yes"
   TARGET_HOSTS=("$IDENT")
+elif jq -e ".hosts[\"$IDENT_LC\"]" "$INV_FILE" >/dev/null 2>&1; then
+  IDENT_IS_HOST="yes"
+  TARGET_HOSTS=("$IDENT_LC")
 else
   mapfile -t env_hosts < <(hosts_for_env "$IDENT")
   if [[ ${#env_hosts[@]} -eq 0 ]]; then
@@ -112,10 +134,18 @@ if [[ "$IDENT_IS_HOST" != "yes" && ${#TARGET_HOSTS[@]} -gt 1 && "$ALL_MODE" != "
   done
   echo
   echo "Run again with a specific host, e.g.:"
-  echo "  appctl $CMD $CLIENT_RAW ${TARGET_HOSTS[0]} $APP ${OTHER_ARGS[*]}"
+  if [[ -n "$APP" ]]; then
+    echo "  appctl $CMD $CLIENT_RAW ${TARGET_HOSTS[0]} $APP ${OTHER_ARGS[*]}"
+  else
+    echo "  appctl $CMD $CLIENT_RAW ${TARGET_HOSTS[0]} ${OTHER_ARGS[*]}"
+  fi
   echo
   echo "Or run against all hosts in the environment with --all, e.g.:"
-  echo "  appctl $CMD $CLIENT_RAW $IDENT $APP ${OTHER_ARGS[*]} --all --exec"
+  if [[ -n "$APP" ]]; then
+    echo "  appctl $CMD $CLIENT_RAW $IDENT $APP ${OTHER_ARGS[*]} --all --exec"
+  else
+    echo "  appctl $CMD $CLIENT_RAW $IDENT ${OTHER_ARGS[*]} --all --exec"
+  fi
   exit 0
 fi
 
@@ -133,17 +163,25 @@ run_for_host() {
   local HOST="$1"
 
   jq -e ".hosts[\"$HOST\"]" "$INV_FILE" >/dev/null || die "Host '$HOST' not found in inventory."
-  jq -e ".hosts[\"$HOST\"].apps[\"$APP\"]" "$INV_FILE" >/dev/null || die "App '$APP' not found on host '$HOST'."
 
-  local CLIENT_NAME ENVIRONMENT SERVICE_UNIT BASE_DIR PORT RUN_AS_USER
+  # If APP is provided, ensure it exists. If not, info will list all apps.
+  if [[ -n "$APP" ]]; then
+    jq -e ".hosts[\"$HOST\"].apps[\"$APP\"]" "$INV_FILE" >/dev/null || die "App '$APP' not found on host '$HOST'."
+  fi
+
+  local CLIENT_NAME ENVIRONMENT
   CLIENT_NAME="$(jq -r ".client_name" "$INV_FILE")"
   ENVIRONMENT="$(jq -r ".hosts[\"$HOST\"].environment" "$INV_FILE")"
-  SERVICE_UNIT="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.service_unit" "$INV_FILE")"
-  BASE_DIR="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.base_dir" "$INV_FILE")"
-  PORT="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.port" "$INV_FILE")"
-  RUN_AS_USER="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.run_as_user // empty" "$INV_FILE")"
 
-  [[ -n "$RUN_AS_USER" ]] || die "run_as_user is not defined for $HOST/$APP (required)."
+  # App-scoped values (only when APP is set)
+  local SERVICE_UNIT BASE_DIR PORT RUN_AS_USER
+  if [[ -n "$APP" ]]; then
+    SERVICE_UNIT="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.service_unit" "$INV_FILE")"
+    BASE_DIR="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.base_dir" "$INV_FILE")"
+    PORT="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.port" "$INV_FILE")"
+    RUN_AS_USER="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.run_as_user // empty" "$INV_FILE")"
+    [[ -n "$RUN_AS_USER" ]] || die "run_as_user is not defined for $HOST/$APP (required)."
+  fi
 
   local SSH_TARGET="${MW_SSH_TARGET:-$HOST}"
 
@@ -152,9 +190,11 @@ run_for_host() {
     echo "Client : $CLIENT_NAME"
     echo "Host   : $HOST"
     echo "Env    : $ENVIRONMENT"
-    echo "App    : $APP"
-    echo "Service: $SERVICE_UNIT"
-    echo "RunAs  : $RUN_AS_USER"
+    echo "App    : ${APP:-<ALL>}"
+    if [[ -n "${SERVICE_UNIT:-}" ]]; then
+      echo "Service: $SERVICE_UNIT"
+      echo "RunAs  : $RUN_AS_USER"
+    fi
     echo "--------------------------------------------"
     echo
   }
@@ -203,25 +243,70 @@ run_for_host() {
   }
 
   case "$CMD" in
-    info)
-      header
-      echo "Base Dir : $BASE_DIR"
-      echo "Port     : $PORT"
-      echo "Run As   : $RUN_AS_USER"
-      echo
-      echo "Available logs:"
-      jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.logs | keys[]" "$INV_FILE" | sed 's/^/  - /'
+        info)
+      if [[ -n "$APP" ]]; then
+        header
+        echo "Base Dir : $BASE_DIR"
+        echo "Port     : $PORT"
+        echo "Run As   : $RUN_AS_USER"
+        echo
+        echo "Available logs:"
+        jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.logs | keys[]" "$INV_FILE" | sed 's/^/  - /'
+      else
+        # List all apps on this host
+        echo "--------------------------------------------"
+        echo "Client : $CLIENT_NAME"
+        echo "Host   : $HOST"
+        echo "Env    : $ENVIRONMENT"
+        echo "--------------------------------------------"
+        echo
+
+        mapfile -t all_apps < <(jq -r ".hosts[\"$HOST\"].apps | keys[]" "$INV_FILE")
+        if [[ ${#all_apps[@]} -eq 0 ]]; then
+          echo "No apps defined for this host."
+          return 0
+        fi
+
+        for a in "${all_apps[@]}"; do
+          local su bd pt ru url
+          su="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.service_unit // \"<missing>\"" "$INV_FILE")"
+          bd="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.base_dir // \"<missing>\"" "$INV_FILE")"
+          pt="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.port // \"<missing>\"" "$INV_FILE")"
+          ru="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.run_as_user // \"<missing>\"" "$INV_FILE")"
+          url="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.url // empty" "$INV_FILE")"
+
+          echo "APP: $a"
+          echo "  Service : $su"
+          echo "  Base Dir: $bd"
+          echo "  Port    : $pt"
+          echo "  Run As  : $ru"
+          if [[ -n "$url" && "$url" != "null" ]]; then
+            echo "  URL     : $url"
+          fi
+
+          echo "  Logs:"
+          if jq -e ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.logs" "$INV_FILE" >/dev/null 2>&1; then
+            jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.logs | to_entries[] | \"    - \(.key): \(.value)\"" "$INV_FILE"
+          else
+            echo "    - <none>"
+          fi
+
+          echo
+        done
+      fi
       ;;
 
     status)
+      [[ -n "$APP" ]] || die "status requires <APP>. Example: appctl status PRCC TEST BEP"
       local cmd_status cmd_active cmd_ports
       cmd_status="$(sysctl status "$SERVICE_UNIT")"
       cmd_active="$(sysctl is-active "$SERVICE_UNIT")"
-      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep $PORT || true")"
+      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep -E '[:.]$PORT\\b' || true")"
       exec_or_print "$cmd_status; echo; $cmd_active; echo; $cmd_ports"
       ;;
 
     logs)
+      [[ -n "$APP" ]] || die "logs requires <APP>. Example: appctl logs PRCC TEST BEP catalina"
       [[ ${#OTHER_ARGS[@]} -ge 1 ]] || die "Missing <logname> for 'logs' command."
       local LOGNAME="${OTHER_ARGS[0]}"
 
@@ -236,18 +321,25 @@ run_for_host() {
         i=$((i+1))
       done
 
+      [[ "$LINES" =~ ^[0-9]+$ ]] || die "--lines must be a number. Got: '$LINES'"
+
       local LOGPATH
       LOGPATH="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.logs[\"$LOGNAME\"] // empty" "$INV_FILE")"
       [[ -n "$LOGPATH" ]] || die "Log '$LOGNAME' not found for $HOST/$APP."
 
+      local q_path q_filter
+      q_path="$(printf '%q' "$LOGPATH")"
+
       if [[ -n "$FILTER" ]]; then
-        exec_or_print "$(as_runas_user "tail -n $LINES $LOGPATH | egrep -i \"$FILTER\" || true")"
+        q_filter="$(printf '%q' "$FILTER")"
+        exec_or_print "$(as_runas_user "tail -n $LINES $q_path | grep -Ei -- $q_filter || true")"
       else
-        exec_or_print "$(as_runas_user "tail -n $LINES $LOGPATH")"
+        exec_or_print "$(as_runas_user "tail -n $LINES $q_path")"
       fi
       ;;
 
     journal)
+      [[ -n "$APP" ]] || die "journal requires <APP>. Example: appctl journal PRCC TEST BEP"
       local LINES=200
       local j=0
       while [[ $j -lt ${#OTHER_ARGS[@]} ]]; do
@@ -256,10 +348,12 @@ run_for_host() {
         fi
         j=$((j+1))
       done
+      [[ "$LINES" =~ ^[0-9]+$ ]] || die "--lines must be a number. Got: '$LINES'"
       exec_or_print "$(as_runas_user "journalctl -u $SERVICE_UNIT -n $LINES --no-pager")"
       ;;
 
     url)
+      [[ -n "$APP" ]] || die "url requires <APP>. Example: appctl url PRCC TEST BEP"
       local URL
       URL="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.url // empty" "$INV_FILE")"
       if [[ -z "$URL" || "$URL" == "null" ]]; then
@@ -317,14 +411,16 @@ run_for_host() {
       ;;
 
     start)
+      [[ -n "$APP" ]] || die "start requires <APP>. Example: appctl start PRCC TEST BEP --exec"
       local cmd_start cmd_verify cmd_ports
       cmd_start="$(sysctl start "$SERVICE_UNIT")"
       cmd_verify="$(sysctl is-active "$SERVICE_UNIT")"
-      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep $PORT || true")"
+      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep -E '[:.]$PORT\\b' || true")"
       exec_or_print "$cmd_start; echo; echo Verifying...; $cmd_verify; echo; $cmd_ports"
       ;;
 
     stop)
+      [[ -n "$APP" ]] || die "stop requires <APP>. Example: appctl stop PRCC TEST BEP --exec"
       local cmd_stop cmd_verify
       cmd_stop="$(sysctl stop "$SERVICE_UNIT")"
       cmd_verify="$(sysctl is-active "$SERVICE_UNIT")"
@@ -332,10 +428,11 @@ run_for_host() {
       ;;
 
     restart)
+      [[ -n "$APP" ]] || die "restart requires <APP>. Example: appctl restart PRCC TEST BEP --exec"
       local cmd_restart cmd_verify cmd_ports
       cmd_restart="$(sysctl restart "$SERVICE_UNIT")"
       cmd_verify="$(sysctl is-active "$SERVICE_UNIT")"
-      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep $PORT || true")"
+      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep -E '[:.]$PORT\\b' || true")"
       exec_or_print "$cmd_restart; echo; echo Verifying...; $cmd_verify; echo; $cmd_ports"
       ;;
 
