@@ -10,7 +10,8 @@ usage() {
 cat <<'EOF'
 Usage:
   appctl <cmd> <CLIENT> <HOST|ENV> <APP> [args...] [--all] [--exec]
-  appctl info <CLIENT> <HOST|ENV> [APP] [--all] [--exec]
+  appctl info   <CLIENT> <HOST|ENV> [APP] [--all] [--exec]
+  appctl status <CLIENT> <HOST|ENV> [APP] [--all] [--exec]
 
 Commands:
   info
@@ -29,21 +30,26 @@ Modes:
 Environment targeting:
   - The 3rd arg may be a host (e.g. it-s-banethos-t) OR an environment (e.g. TEST).
   - If ENV matches one host: it will be used automatically.
-  - If ENV matches multiple hosts: appctl prints candidates and exits,
-    unless you add --all (then it runs against all matching hosts).
+  - If ENV matches multiple hosts:
+      - default behavior: appctl prints candidates and exits unless you add --all.
+      - EXCEPTION: `status` without APP defaults to all hosts in the environment.
 
 Execution model:
   - All remote commands run as the inventory run_as_user (e.g., tomcat) via:
       sudo -u <run_as_user> bash -lc '<cmd>'
   - systemctl is executed as root but invoked by run_as_user:
-      sudo -n /bin/systemctl <action> tc_TEST*.service
+      sudo -n /bin/systemctl <action> <unit>
 
 Examples:
   appctl info PRCC TEST BEP
   appctl info PRCC TEST
   appctl info PRCC it-s-banethos-t
-  appctl status PRCC TEST BEP --exec
-  appctl logs PRCC TEST BEP catalina --lines 50 --exec
+
+  appctl status PRCC TEST --exec
+  appctl status PRCC it-s-banethos-t --exec
+  appctl status PRCC it-s-banethos-t BEP --exec
+
+  appctl logs PRCC TEST BEP catalina --lines 50 --filter ERROR --exec
   appctl restart PRCC TEST BEP --exec
 EOF
 }
@@ -52,15 +58,14 @@ EOF
 [[ $# -ge 1 ]] || { usage; exit 1; }
 CMD="$1"; shift || true
 
-# For info: require at least CLIENT + HOST|ENV (APP optional)
-# For others: require CLIENT + HOST|ENV + APP
+# Require at least CLIENT + HOST|ENV for info/status; for others require +APP
 [[ $# -ge 2 ]] || { usage; exit 1; }
 CLIENT_RAW="$1"; shift
 IDENT="$1"; shift   # HOST or ENV
 
 APP=""
-if [[ "$CMD" == "info" ]]; then
-  # info allows optional APP (if next token is not an option)
+if [[ "$CMD" == "info" || "$CMD" == "status" ]]; then
+  # info/status allow optional APP (if next token is not an option)
   if [[ $# -ge 1 && "${1:0:2}" != "--" ]]; then
     APP="$1"; shift
   fi
@@ -73,7 +78,6 @@ CLIENT="$(echo "$CLIENT_RAW" | tr '[:upper:]' '[:lower:]')"
 INV_FILE="$INV_DIR/${CLIENT}.json"
 [[ -f "$INV_FILE" ]] || die "Inventory not found: $INV_FILE"
 
-# ---- Require jq ----
 command -v jq >/dev/null 2>&1 || die "jq is required but not found in PATH."
 
 # ---- Parse options anywhere in remaining args ----
@@ -119,10 +123,13 @@ elif jq -e ".hosts[\"$IDENT_LC\"]" "$INV_FILE" >/dev/null 2>&1; then
   TARGET_HOSTS=("$IDENT_LC")
 else
   mapfile -t env_hosts < <(hosts_for_env "$IDENT")
-  if [[ ${#env_hosts[@]} -eq 0 ]]; then
-    die "Neither host '$IDENT' exists nor environment '$IDENT' matches any host in this inventory."
-  fi
+  [[ ${#env_hosts[@]} -gt 0 ]] || die "Neither host '$IDENT' exists nor environment '$IDENT' matches any host in this inventory."
   TARGET_HOSTS=("${env_hosts[@]}")
+fi
+
+# If status without APP and ENV matches multiple hosts => default to all hosts (no prompt)
+if [[ "$CMD" == "status" && -z "$APP" && "$IDENT_IS_HOST" != "yes" && ${#TARGET_HOSTS[@]} -gt 1 ]]; then
+  ALL_MODE="yes"
 fi
 
 if [[ "$IDENT_IS_HOST" != "yes" && ${#TARGET_HOSTS[@]} -gt 1 && "$ALL_MODE" != "yes" ]]; then
@@ -164,7 +171,7 @@ run_for_host() {
 
   jq -e ".hosts[\"$HOST\"]" "$INV_FILE" >/dev/null || die "Host '$HOST' not found in inventory."
 
-  # If APP is provided, ensure it exists. If not, info will list all apps.
+  # If APP is provided, ensure it exists.
   if [[ -n "$APP" ]]; then
     jq -e ".hosts[\"$HOST\"].apps[\"$APP\"]" "$INV_FILE" >/dev/null || die "App '$APP' not found on host '$HOST'."
   fi
@@ -205,13 +212,13 @@ run_for_host() {
     ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "bash -lc $(printf '%q' "$wrapped")"
   }
 
-  # Run any command as RUN_AS_USER (passwordless expected based on sudoers setup).
+  # Run any command as RUN_AS_USER
   as_runas_user() {
     local cmd="$1"
     echo "sudo -u $RUN_AS_USER bash -lc $(printf '%q' "$cmd")"
   }
 
-  # Run systemctl as root but invoked by RUN_AS_USER (tomcat has NOPASSWD for tc_TEST*.service).
+  # Run systemctl as root but invoked by RUN_AS_USER
   sysctl() {
     local action="$1"
     local unit="$2"
@@ -243,7 +250,7 @@ run_for_host() {
   }
 
   case "$CMD" in
-        info)
+    info)
       if [[ -n "$APP" ]]; then
         header
         echo "Base Dir : $BASE_DIR"
@@ -253,7 +260,6 @@ run_for_host() {
         echo "Available logs:"
         jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.logs | keys[]" "$INV_FILE" | sed 's/^/  - /'
       else
-        # List all apps on this host
         echo "--------------------------------------------"
         echo "Client : $CLIENT_NAME"
         echo "Host   : $HOST"
@@ -290,19 +296,94 @@ run_for_host() {
           else
             echo "    - <none>"
           fi
-
           echo
         done
       fi
       ;;
 
     status)
-      [[ -n "$APP" ]] || die "status requires <APP>. Example: appctl status PRCC TEST BEP"
-      local cmd_status cmd_active cmd_ports
-      cmd_status="$(sysctl status "$SERVICE_UNIT")"
-      cmd_active="$(sysctl is-active "$SERVICE_UNIT")"
-      cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep -E '[:.]$PORT\\b' || true")"
-      exec_or_print "$cmd_status; echo; $cmd_active; echo; $cmd_ports"
+      if [[ -n "$APP" ]]; then
+        local cmd_status cmd_active cmd_ports
+        cmd_status="$(sysctl status "$SERVICE_UNIT")"
+        cmd_active="$(sysctl is-active "$SERVICE_UNIT")"
+        cmd_ports="$(as_runas_user "ss -lntp 2>/dev/null | grep -E '[:.]$PORT\\b' || true")"
+        exec_or_print "$cmd_status; echo; $cmd_active; echo; $cmd_ports"
+        return 0
+      fi
+
+      # Multi-app status for this host (ALL apps)
+      as_user() {
+        local ru="$1"; shift
+        local cmd="$*"
+        echo "sudo -u $ru bash -lc $(printf '%q' "$cmd")"
+      }
+      sysctl_user() {
+        local ru="$1"; local action="$2"; local unit="$3"
+        echo "$(as_user "$ru" "sudo -n /bin/systemctl $action $unit")"
+      }
+
+      mapfile -t all_apps < <(jq -r ".hosts[\"$HOST\"].apps | keys[]" "$INV_FILE")
+      header
+      echo "App    : <ALL>"
+      echo
+
+      if [[ ${#all_apps[@]} -eq 0 ]]; then
+        echo "No apps defined for this host."
+        return 0
+      fi
+
+      if [[ "$EXEC_MODE" == "exec" ]]; then
+        local remote=""
+        remote+="echo 'Client : $CLIENT_NAME';"
+        remote+="echo 'Host   : $HOST';"
+        remote+="echo 'Env    : $ENVIRONMENT';"
+        remote+="echo 'App    : <ALL>';"
+        remote+="echo;"
+
+        for a in "${all_apps[@]}"; do
+          local su pt ru
+          su="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.service_unit // \"<missing>\"" "$INV_FILE")"
+          pt="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.port // \"<missing>\"" "$INV_FILE")"
+          ru="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.run_as_user // \"<missing>\"" "$INV_FILE")"
+
+          remote+="echo 'APP: $a';"
+          remote+="echo '  Service : $su';"
+          remote+="echo '  Port    : $pt';"
+          remote+="echo '  Run As  : $ru';"
+
+          if [[ "$ru" != "<missing>" && "$su" != "<missing>" ]]; then
+            remote+="$(sysctl_user "$ru" "is-active" "$su") | sed 's/^/  State   : /';"
+          else
+            remote+="echo '  State   : unknown';"
+          fi
+
+          if [[ "$ru" != "<missing>" && "$pt" != "<missing>" ]]; then
+            remote+="$(as_user "$ru" "ss -lnt 2>/dev/null | grep -E '[:.]$pt\\b' >/dev/null && echo listening || echo not_listening") | sed 's/^/  Listen  : /';"
+          else
+            remote+="echo '  Listen  : unknown';"
+          fi
+
+          remote+="echo;"
+        done
+
+        exec_or_print "$remote"
+      else
+        # Print-mode: no real state
+        for a in "${all_apps[@]}"; do
+          local su pt ru
+          su="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.service_unit // \"<missing>\"" "$INV_FILE")"
+          pt="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.port // \"<missing>\"" "$INV_FILE")"
+          ru="$(jq -r ".hosts[\"$HOST\"].apps[\"$a\"].tomcat.run_as_user // \"<missing>\"" "$INV_FILE")"
+
+          echo "APP: $a"
+          echo "  Service : $su"
+          echo "  Port    : $pt"
+          echo "  Run As  : $ru"
+          echo "  State   : (run with --exec)"
+          echo "  Listen  : (run with --exec)"
+          echo
+        done
+      fi
       ;;
 
     logs)
@@ -312,30 +393,43 @@ run_for_host() {
 
       local LINES=200
       local FILTER=""
-      local i=1
-      while [[ $i -lt ${#OTHER_ARGS[@]} ]]; do
-        case "${OTHER_ARGS[$i]}" in
-          --lines) i=$((i+1)); LINES="${OTHER_ARGS[$i]:-200}" ;;
-          --filter) i=$((i+1)); FILTER="${OTHER_ARGS[$i]:-}" ;;
-        esac
-        i=$((i+1))
-      done
+      local idx=1
 
-      [[ "$LINES" =~ ^[0-9]+$ ]] || die "--lines must be a number. Got: '$LINES'"
+      # Robust flag parsing: supports --lines N and --filter REGEX in any order
+      while [[ $idx -lt ${#OTHER_ARGS[@]} ]]; do
+        case "${OTHER_ARGS[$idx]}" in
+          --lines)
+            ((idx++))
+            [[ $idx -lt ${#OTHER_ARGS[@]} ]] || die "--lines requires a number"
+            [[ "${OTHER_ARGS[$idx]}" =~ ^[0-9]+$ ]] || die "--lines must be a number. Got: '${OTHER_ARGS[$idx]}'"
+            LINES="${OTHER_ARGS[$idx]}"
+            ;;
+          --filter)
+            ((idx++))
+            [[ $idx -lt ${#OTHER_ARGS[@]} ]] || die "--filter requires a value"
+            FILTER="${OTHER_ARGS[$idx]}"
+            ;;
+          *)
+            ;;
+        esac
+        ((idx++))
+      done
 
       local LOGPATH
       LOGPATH="$(jq -r ".hosts[\"$HOST\"].apps[\"$APP\"].tomcat.logs[\"$LOGNAME\"] // empty" "$INV_FILE")"
       [[ -n "$LOGPATH" ]] || die "Log '$LOGNAME' not found for $HOST/$APP."
 
-      local q_path q_filter
+      # Build safe command
+      local q_path q_filter cmd
       q_path="$(printf '%q' "$LOGPATH")"
 
+      cmd="tail -n $LINES $q_path"
       if [[ -n "$FILTER" ]]; then
         q_filter="$(printf '%q' "$FILTER")"
-        exec_or_print "$(as_runas_user "tail -n $LINES $q_path | grep -Ei -- $q_filter || true")"
-      else
-        exec_or_print "$(as_runas_user "tail -n $LINES $q_path")"
+        cmd="$cmd | grep -Ei -- $q_filter || true"
       fi
+
+      exec_or_print "$(as_runas_user "$cmd")"
       ;;
 
     journal)
@@ -381,7 +475,10 @@ run_for_host() {
 
       local out=""
       if ! out="$(run_ssh "$remote_cmd" 2>&1)"; then
-        echo "URL: $URL | ERROR: $out"
+        echo "URL     : $URL"
+        echo "HTTP    : ERROR"
+        echo "Time    : -"
+        echo "Error   : $out"
         return 1
       fi
 
@@ -389,25 +486,10 @@ run_for_host() {
       HTTP_CODE="$(echo "$out" | awk '{print $1}')"
       TIME_TOTAL="$(echo "$out" | awk '{print $2}')"
 
-      local GREEN YELLOW RED NC COLOR
-      if [[ -t 1 ]]; then
-        GREEN=$'\033[0;32m'
-        YELLOW=$'\033[0;33m'
-        RED=$'\033[0;31m'
-        NC=$'\033[0m'
-      else
-        GREEN=""; YELLOW=""; RED=""; NC=""
-      fi
-
-      if [[ "$HTTP_CODE" =~ ^[0-9]+$ ]]; then
-        if [[ "$HTTP_CODE" -ge 200 && "$HTTP_CODE" -lt 300 ]]; then COLOR="$GREEN"
-        elif [[ "$HTTP_CODE" -ge 300 && "$HTTP_CODE" -lt 400 ]]; then COLOR="$YELLOW"
-        else COLOR="$RED"; fi
-        echo "URL: $URL | ${COLOR}Status code: $HTTP_CODE${NC} | Time: ${TIME_TOTAL}s"
-      else
-        echo "URL: $URL | ERROR: $out"
-        return 1
-      fi
+      # Parse-friendly output for Slack dashboard
+      echo "URL     : $URL"
+      echo "HTTP    : $HTTP_CODE"
+      echo "Time    : ${TIME_TOTAL}s"
       ;;
 
     start)
