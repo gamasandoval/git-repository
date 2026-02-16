@@ -3,13 +3,21 @@
 AppPilot Slack Bot (Socket Mode + Slash Command)
 
 Behavior:
-- If the command does NOT include --exec or --exec-tty -> RAW only.
-- If includes --exec or --exec-tty:
-    - For `status` -> Pretty dashboard.
-    - Others -> RAW.
-- If --raw is present -> always RAW.
+- info -> ALWAYS RAW (inventory output).
+- status:
+    - if --exec and NOT --raw:
+        - single-app -> pretty dashboard
+        - host/env without APP -> multi-service health dashboard (by host)
+    - otherwise -> RAW
+- url:
+    - if --exec and NOT --raw -> URL dashboard
+    - otherwise -> RAW
+- --raw forces RAW always.
 
-Branding configurable via environment variables.
+Important:
+- Only tool flags are lifted out of the user's command:
+    --exec, --all (ctl/tool flags), and --raw (bot-only)
+- Command-specific flags like --lines / --filter MUST stay in order.
 """
 
 import os
@@ -24,28 +32,20 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 
-# ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("apppilot-slack")
 
-
-# ---------------- Required Slack Tokens ----------------
 BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
-
 app = App(token=BOT_TOKEN)
 
-
-# ---------------- Branding / Config ----------------
 APP_BRAND = os.environ.get("APP_BRAND", "AppPilot")
 SLASH_CMD = os.environ.get("SLASH_CMD", "/appctl").strip()
 
 APPCTL_BIN_DEFAULT = "/home/mobaxterm/BOX/Code/slackbot/bin/appctl"
 APPCTL_BIN = os.environ.get("APPCTL_BIN", APPCTL_BIN_DEFAULT)
 
-# Python 3.7 compatible CTL_BIN detection
 CTL_BIN = os.environ.get("CTL_BIN", "").strip()
-
 if not CTL_BIN:
     if shutil.which("appctl"):
         CTL_BIN = "appctl"
@@ -59,17 +59,21 @@ try:
 except ValueError:
     TIMEOUT = 30
 
-ALLOWED_CMDS = {"info", "status", "logs", "journal", "url", "stop", "start", "restart" }
+ALLOWED_CMDS = {"info", "status", "logs", "journal", "url", "stop", "start", "restart"}
+
+# Bot-only flags (NOT passed to bash)
 BOT_FLAGS = {"--raw"}
 
+# Tool/ctl flags that we DO want to lift out (order doesn't matter for these)
+CTL_FLAGS = {"--exec", "--all"}
 
-# ---------------- Helpers ----------------
-def strip_ansi(text):
+
+def strip_ansi(text: str) -> str:
     ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
     return ansi_escape.sub("", text or "")
 
 
-def normalize_state(state):
+def normalize_state(state: Optional[str]) -> str:
     s = (state or "").strip().upper()
     if s in ("RUNNING", "ACTIVE"):
         return "RUNNING"
@@ -80,7 +84,7 @@ def normalize_state(state):
     return s or "UNKNOWN"
 
 
-def state_badge(state):
+def state_badge(state: Optional[str]) -> str:
     st = normalize_state(state)
     if st == "RUNNING":
         return "🟢"
@@ -91,7 +95,21 @@ def state_badge(state):
     return "⚪"
 
 
-def build_bash_login_command(parts):
+def build_usage_text() -> str:
+    return (
+        f"*{APP_BRAND}* usage:\n"
+        f"• `{SLASH_CMD} info <CLIENT> <HOST|ENV> [APP] [--all] [--exec]`\n"
+        f"• `{SLASH_CMD} status <CLIENT> <HOST|ENV> [APP] [--all] [--exec]`\n"
+        f"• `{SLASH_CMD} url <CLIENT> <HOST|ENV> <APP> [--exec]`\n"
+        f"• `{SLASH_CMD} restart <CLIENT> <HOST|ENV> <APP> [--all] [--exec]`\n"
+        f"• `{SLASH_CMD} logs <CLIENT> <HOST|ENV> <APP> <logname> [--lines N] [--filter REGEX] [--exec]`\n"
+        f"Flags:\n"
+        f"• `--exec` runs via SSH (bash handles execution)\n"
+        f"• `--raw` forces raw output (no dashboard)\n"
+    )
+
+
+def build_bash_login_command(parts: List[str]) -> List[str]:
     cmd_str = "{} {}".format(
         shlex.quote(CTL_BIN),
         " ".join(shlex.quote(p) for p in parts),
@@ -99,27 +117,33 @@ def build_bash_login_command(parts):
     return ["/usr/bin/bash", "-lc", cmd_str]
 
 
-def split_flags(parts):
-    core = []
-    ctl_flags = []
-    bot_flags = []
+def split_flags(parts: List[str]) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Keep user argument order for command-specific flags like --lines/--filter.
+    Only extract:
+      - bot_flags: --raw
+      - ctl_flags: --exec, --all
+    Everything else stays in core IN ORIGINAL ORDER.
+    """
+    core: List[str] = []
+    ctl_flags: List[str] = []
+    bot_flags: List[str] = []
 
     for p in parts:
-        if p.startswith("--"):
-            if p in BOT_FLAGS:
-                bot_flags.append(p)
-            else:
-                ctl_flags.append(p)
+        if p in BOT_FLAGS:
+            bot_flags.append(p)
+        elif p in CTL_FLAGS:
+            ctl_flags.append(p)
         else:
             core.append(p)
 
     return core, ctl_flags, bot_flags
 
 
-def parse_status_details(output):
+def parse_header_details(output: str) -> Dict[str, str]:
     clean = strip_ansi(output)
     lines = [ln.rstrip() for ln in clean.splitlines()]
-    info = {}
+    info: Dict[str, str] = {}
 
     header_patterns = [
         ("Client", r"^\s*Client\s*:\s*(.+)\s*$"),
@@ -129,7 +153,6 @@ def parse_status_details(output):
         ("Service", r"^\s*Service\s*:\s*(.+)\s*$"),
         ("RunAs", r"^\s*RunAs\s*:\s*(.+)\s*$"),
     ]
-
     compiled = [(k, re.compile(p)) for k, p in header_patterns]
 
     for ln in lines:
@@ -137,6 +160,14 @@ def parse_status_details(output):
             m = rx.match(ln)
             if m and key not in info:
                 info[key] = m.group(1).strip()
+    return info
+
+
+def parse_status_details(output: str) -> Dict[str, str]:
+    info = parse_header_details(output)
+
+    clean = strip_ansi(output)
+    lines = [ln.rstrip() for ln in clean.splitlines()]
 
     active_line = ""
     for ln in lines:
@@ -186,7 +217,7 @@ def parse_status_details(output):
     return info
 
 
-def build_blocks_like_image(summary):
+def build_blocks_like_image(summary: Dict[str, str]) -> List[Dict[str, Any]]:
     client = summary.get("Client", "Unknown")
     host = summary.get("Host", "Unknown")
     env = summary.get("Env", "Unknown")
@@ -205,29 +236,29 @@ def build_blocks_like_image(summary):
     client_line = "*Client:* {}".format(client)
     environment_line = "*Environment:* {}".format(env)
 
-    blocks = [
+    blocks: List[Dict[str, Any]] = [
         {"type": "header", "text": {"type": "plain_text", "text": "Status Result", "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn", "text": "{}\n{}\n{}".format(top_line, client_line, environment_line)}},
         {"type": "divider"},
     ]
 
-    fields = []
-
-    def field(label, value):
+    def field(label: str, value: str) -> Dict[str, Any]:
         return {"type": "mrkdwn", "text": "*{}:*\n{}".format(label, value)}
 
-    fields.append(field("Service", "`{}`".format(service)))
-    fields.append(field("State", "{} *{}*".format(icon, state)))
-    fields.append(field("Uptime", uptime if uptime else "—"))
-    fields.append(field("Since", since if since else "—"))
-    fields.append(field("Memory", memory if memory else "—"))
-    fields.append(field("Port", port if port else "—"))
+    fields: List[Dict[str, Any]] = [
+        field("Service", "`{}`".format(service)),
+        field("State", "{} *{}*".format(icon, state)),
+        field("Uptime", uptime if uptime else "—"),
+        field("Since", since if since else "—"),
+        field("Memory", memory if memory else "—"),
+        field("Port", port if port else "—"),
+    ]
 
     blocks.append({"type": "section", "fields": fields[:10]})
     return blocks
 
 
-def to_raw_response(text, summary=None):
+def to_raw_response(text: str, summary: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     cleaned = strip_ansi(text).strip() or "(no output)"
     cleaned = cleaned[:3900]
 
@@ -245,29 +276,234 @@ def to_raw_response(text, summary=None):
     header = "{} *{}*  |  *{}* ({})  |  *{}*\n*Service:* `{}`  •  *Status:* *{}*".format(
         icon, client, host, env, app_name, service, state
     )
-
     return {"text": "{}\n```{}```".format(header, cleaned)}
 
 
-# ---------------- Core logic ----------------
-def run_ctl(user_text):
-    parts = shlex.split(user_text)
+# ---------- Multi-service status dashboard parsing ----------
+def health_icon_from_is_active(state_val: str, listen_val: str) -> str:
+    s = (state_val or "").strip().lower()
+    l = (listen_val or "").strip().lower()
+    if s == "active" and l == "listening":
+        return "🟢"
+    if s == "active":
+        return "🟡"
+    if s in ("failed", "inactive", "dead"):
+        return "🔴"
+    if s in ("activating", "deactivating", "reloading"):
+        return "🟡"
+    return "⚪"
 
+
+def parse_status_multi(output: str) -> List[Dict[str, Any]]:
+    text = strip_ansi(output or "")
+    lines = [ln.rstrip("\n") for ln in text.splitlines()]
+
+    sections: List[Dict[str, Any]] = []
+    cur: Optional[Dict[str, Any]] = None
+    cur_app: Optional[Dict[str, Any]] = None
+
+    rx_client = re.compile(r"^\s*Client\s*:\s*(.+)\s*$")
+    rx_host = re.compile(r"^\s*Host\s*:\s*(.+)\s*$")
+    rx_env = re.compile(r"^\s*Env\s*:\s*(.+)\s*$")
+    rx_app = re.compile(r"^\s*APP:\s*(.+)\s*$")
+    rx_kv = re.compile(r"^\s{2}([A-Za-z ]+)\s*:\s*(.+)\s*$")
+
+    def flush_app():
+        nonlocal cur_app, cur
+        if cur and cur_app:
+            cur["apps"].append(cur_app)
+        cur_app = None
+
+    def flush_section():
+        nonlocal cur
+        if cur:
+            flush_app()
+            sections.append(cur)
+        cur = None
+
+    for ln in lines:
+        m = rx_client.match(ln)
+        if m:
+            if not cur:
+                cur = {"Client": m.group(1).strip(), "Host": "", "Env": "", "apps": []}
+            else:
+                cur["Client"] = m.group(1).strip()
+            continue
+
+        m = rx_host.match(ln)
+        if m:
+            if not cur:
+                cur = {"Client": "", "Host": m.group(1).strip(), "Env": "", "apps": []}
+            else:
+                cur["Host"] = m.group(1).strip()
+            continue
+
+        m = rx_env.match(ln)
+        if m:
+            if not cur:
+                cur = {"Client": "", "Host": "", "Env": m.group(1).strip(), "apps": []}
+            else:
+                cur["Env"] = m.group(1).strip()
+            continue
+
+        m = rx_app.match(ln)
+        if m:
+            if not cur:
+                cur = {"Client": "", "Host": "", "Env": "", "apps": []}
+            flush_app()
+            cur_app = {"App": m.group(1).strip(), "Service": "", "Port": "", "RunAs": "", "State": "", "Listen": ""}
+            continue
+
+        m = rx_kv.match(ln)
+        if m and cur_app is not None:
+            key = m.group(1).strip().lower()
+            val = m.group(2).strip()
+            if key.startswith("service"):
+                cur_app["Service"] = val
+            elif key.startswith("port"):
+                cur_app["Port"] = val
+            elif key.startswith("run as"):
+                cur_app["RunAs"] = val
+            elif key.startswith("state"):
+                cur_app["State"] = val
+            elif key.startswith("listen"):
+                cur_app["Listen"] = val
+            continue
+
+    flush_section()
+    return sections
+
+
+def build_status_multi_blocks(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    blocks: List[Dict[str, Any]] = []
+    first = True
+
+    def trunc(s: str, w: int) -> str:
+        s = s or ""
+        return s if len(s) <= w else (s[: max(0, w - 1)] + "…")
+
+    for sec in sections:
+        client = sec.get("Client") or "Unknown"
+        host = sec.get("Host") or "Unknown"
+        env = sec.get("Env") or "Unknown"
+        apps: List[Dict[str, Any]] = sec.get("apps") or []
+
+        green = yellow = red = gray = 0
+        for a in apps:
+            icon = health_icon_from_is_active(a.get("State", ""), a.get("Listen", ""))
+            if icon == "🟢":
+                green += 1
+            elif icon == "🟡":
+                yellow += 1
+            elif icon == "🔴":
+                red += 1
+            else:
+                gray += 1
+
+        summary_line = f"🟢 {green}   🟡 {yellow}   🔴 {red}   ⚪ {gray}"
+
+        if not first:
+            blocks.append({"type": "divider"})
+        first = False
+
+        blocks.append({"type": "header", "text": {"type": "plain_text", "text": f"Environment Status — {host} ({env})", "emoji": True}})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Client:* {client}  •  *Services:* {len(apps)}\n{summary_line}"}})
+
+        rows: List[str] = []
+        rows.append("HEALTH  APP               PORT   LISTEN        SERVICE")
+        rows.append("------  ----------------  -----  ------------  ------------------------------")
+
+        for a in apps:
+            icon = health_icon_from_is_active(a.get("State", ""), a.get("Listen", ""))
+            appn = trunc(a.get("App", ""), 16).ljust(16)
+            port = trunc(a.get("Port", ""), 5).ljust(5)
+            listen = trunc(a.get("Listen", ""), 12).ljust(12)
+            svc = trunc(a.get("Service", ""), 30)
+            rows.append(f"{icon:<6}  {appn}  {port}  {listen}  {svc}")
+
+        table = "```" + "\n".join(rows[:120]) + "```"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": table}})
+
+    return blocks
+
+
+# ---------- URL dashboard ----------
+def parse_url_result(output: str) -> Tuple[str, str, str]:
+    url = ""
+    http = ""
+    t = ""
+    for ln in strip_ansi(output).splitlines():
+        m = re.match(r"^\s*URL\s*:\s*(.+)\s*$", ln)
+        if m:
+            url = m.group(1).strip()
+        m = re.match(r"^\s*HTTP\s*:\s*(.+)\s*$", ln)
+        if m:
+            http = m.group(1).strip()
+        m = re.match(r"^\s*Time\s*:\s*(.+)\s*$", ln)
+        if m:
+            t = m.group(1).strip()
+    t = t[:-1] if t.endswith("s") else t
+    return url, http, t
+
+
+def build_url_dashboard(hdr: Dict[str, str], raw_output: str) -> List[Dict[str, Any]]:
+    client = hdr.get("Client", "Unknown")
+    host = hdr.get("Host", "Unknown")
+    env = hdr.get("Env", "Unknown")
+    app_name = hdr.get("App", "Unknown")
+
+    url, http_code, time_s = parse_url_result(raw_output)
+
+    icon = "⚪"
+    try:
+        code = int(http_code)
+        if 200 <= code < 300:
+            icon = "🟢"
+        elif 300 <= code < 400:
+            icon = "🟡"
+        else:
+            icon = "🔴"
+    except Exception:
+        icon = "🔴" if http_code and http_code != "ERROR" else "⚪"
+
+    blocks: List[Dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": "URL Health Check", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"{icon} *{app_name}* on *{host}*\n*Client:* {client}\n*Environment:* {env}"}},
+        {"type": "divider"},
+        {"type": "section", "fields": [
+            {"type": "mrkdwn", "text": f"*HTTP:*\n{icon} *{http_code or '—'}*"},
+            {"type": "mrkdwn", "text": f"*Time:*\n{(time_s + 's') if time_s else '—'}"},
+        ]},
+    ]
+    if url:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*URL:*\n{url}"}})
+    return blocks
+
+
+def run_ctl(user_text: str) -> Dict[str, Any]:
+    parts = shlex.split(user_text)
     if not parts:
-        return {"text": "{} usage:\n• `{}` status ...".format(APP_BRAND, SLASH_CMD)}
+        return {"text": build_usage_text()}
 
     core, ctl_flags, bot_flags = split_flags(parts)
+    if not core:
+        return {"text": build_usage_text()}
 
     cmd = core[0]
     if cmd not in ALLOWED_CMDS:
-        return {"text": "Subcommand not allowed: `{}`".format(cmd)}
+        return {"text": f"Subcommand not allowed: `{cmd}`\n\n{build_usage_text()}"}
 
-    if len(core) < 4:
-        return {"text": "ERROR: `{}` requires <CLIENT> <HOST|ENV> <APP>".format(cmd)}
+    if cmd in ("info", "status"):
+        if len(core) < 3:
+            return {"text": f"ERROR: `{cmd}` requires <CLIENT> <HOST|ENV> [APP]\n\n{build_usage_text()}"}
+    else:
+        if len(core) < 4:
+            return {"text": f"ERROR: `{cmd}` requires <CLIENT> <HOST|ENV> <APP>\n\n{build_usage_text()}"}
 
-    exec_mode = ("--exec" in ctl_flags) or ("--exec-tty" in ctl_flags)
-    force_raw = ("--raw" in bot_flags) or (not exec_mode)
+    exec_mode = ("--exec" in ctl_flags)
+    force_raw = ("--raw" in bot_flags)
 
+    # IMPORTANT: keep user order in core, append ctl flags that are safe anywhere
     final_parts = core + ctl_flags
     bash_cmd = build_bash_login_command(final_parts)
 
@@ -284,29 +520,40 @@ def run_ctl(user_text):
             env=env,
         )
     except Exception as e:
-        return {"text": "Error running {}: {}".format(APP_BRAND, e)}
+        return {"text": f"Error running {APP_BRAND}: {e}"}
 
     combined = ((p.stdout or "") + ("\n" + p.stderr if p.stderr else "")).strip()
     combined_clean = strip_ansi(combined)
 
-    summary = parse_status_details(combined_clean) if cmd == "status" else None
+    summary_single = parse_status_details(combined_clean) if cmd == "status" else None
 
     if p.returncode != 0:
-        return {"text": "Exit {}\n{}".format(p.returncode, to_raw_response(combined_clean, summary)["text"])}
+        return {"text": "Exit {}\n{}".format(p.returncode, to_raw_response(combined_clean, summary_single)["text"])}
 
-    if force_raw:
-        return to_raw_response(combined_clean, summary)
+    if cmd == "info":
+        return {"text": "```{}```".format(combined_clean[:3900])}
+
+    if cmd == "url":
+        if force_raw or (not exec_mode):
+            return {"text": "```{}```".format(combined_clean[:3900])}
+        hdr = parse_header_details(combined_clean)
+        return {"text": "URL", "blocks": build_url_dashboard(hdr, combined_clean)}
 
     if cmd == "status":
-        return {
-            "text": "Status",
-            "blocks": build_blocks_like_image(summary or {})
-        }
+        if force_raw or (not exec_mode):
+            return to_raw_response(combined_clean, summary_single)
 
-    return {"text": "```{}```".format(combined_clean[:3900])}
+        if "App    : <ALL>" in combined_clean and "APP:" in combined_clean:
+            sections = parse_status_multi(combined_clean)
+            if sections:
+                return {"text": "Status", "blocks": build_status_multi_blocks(sections)}
+            return to_raw_response(combined_clean, summary_single)
+
+        return {"text": "Status", "blocks": build_blocks_like_image(summary_single or {})}
+
+    return to_raw_response(combined_clean, summary_single)
 
 
-# ---------------- Slash registration ----------------
 def register_commands():
     @app.command(SLASH_CMD)
     def handle_slash(ack, respond, command):
@@ -316,8 +563,6 @@ def register_commands():
 
 register_commands()
 
-
-# ---------------- Main ----------------
 if __name__ == "__main__":
     log.info("Starting %s Slack bot...", APP_BRAND)
     log.info("SLASH_CMD=%s", SLASH_CMD)
