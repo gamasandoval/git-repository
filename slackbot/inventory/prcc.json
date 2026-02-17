@@ -44,7 +44,84 @@
           }
         }
       }
+    },
+    "it-s-dw-web-t": {
+      "environment": "TEST",
+      "description": "PRCC TEST - DegreeWorks host",
+      "init_system": "systemd",
+      "apps": {
+        "DW": {
+          "display_name": "Degree Works",
+          "service": {
+            "run_as_user": "dwadmin",
+            "service_unit": "degreeworks.target",
+            "base_dir": "/u01/app/ellucian/dw/dwtest",
+            "port": null,
+            "logs": {
+              "dashboard": "/u01/app/ellucian/dw/dwtest/scripts/logs/dashboard.log",
+              "controller": "/u01/app/ellucian/dw/dwtest/scripts/logs/controller.log",
+              "transit": "/u01/app/ellucian/dw/dwtest/scripts/logs/transitAPI.log",
+              "http_error": "/usr/local/apache/logs/error_log",
+              "http_access": "/usr/local/apache/logs/access_log"
+            },
+            "url": "https://dw-t.prcc.edu/ResponsiveDashboard/login.html"
+          },
+          "services": [
+            "degreeworks.target",
+            "httpd.service",
+            "degreeworks-transit.service",
+            "degreeworks-controller.service",
+            "degreeworks-responsiveDashboard.service"
+          ],
+          "components": {
+            "DW_HTTP": {
+              "display_name": "Degree Works HTTPD Service",
+              "run_as_user": "dwadmin",
+              "service_unit": "httpd.service",
+              "base_dir": "/usr/local/apache/",
+              "port": 443,
+              "logs": {
+                "error": "/usr/local/apache/logs/error_log",
+                "access": "/usr/local/apache/logs/access_log"
+              },
+              "url": null
+            },
+            "DW_TRANSIT": {
+              "display_name": "Degree Works Transit Service",
+              "run_as_user": "dwadmin",
+              "service_unit": "degreeworks-transit.service",
+              "base_dir": "/u01/app/ellucian/dw/dwtest",
+              "port": 8448,
+              "logs": {
+                "transit": "/u01/app/ellucian/dw/dwtest/scripts/logs/transitAPI.log"
+              },
+              "url": "https://dw-t.prcc.edu/Transit/login.html"
+            },
+            "DW_CONTROLLER": {
+              "display_name": "Degree Works Controller Service",
+              "run_as_user": "dwadmin",
+              "service_unit": "degreeworks-controller.service",
+              "base_dir": "/u01/app/ellucian/dw/dwtest",
+              "port": 8446,
+              "logs": {
+                "controller": "/u01/app/ellucian/dw/dwtest/scripts/logs/controller.log"
+              },
+              "url": "https://dw-t.prcc.edu/Controller/login.html"
+            },
+            "DW_DASHBOARD": {
+              "display_name": "Degree Works Dashboard Service",
+              "run_as_user": "dwadmin",
+              "service_unit": "degreeworks-responsiveDashboard.service",
+              "base_dir": "/u01/app/ellucian/dw/dwtest",
+              "port": 8447,
+              "logs": {
+                "dashboard": "/u01/app/ellucian/dw/dwtest/scripts/logs/dashboard.log"
+              },
+              "url": "https://dw-t.prcc.edu/ResponsiveDashboard/login.html"
+            }
+          }
+        }
+      }
     }
   }
 }
-
