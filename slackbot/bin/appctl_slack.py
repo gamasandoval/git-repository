@@ -6,8 +6,9 @@ Behavior:
 - info -> ALWAYS RAW (inventory output).
 - status:
     - if --exec and NOT --raw:
+        - multi-host or multi-app -> dashboard
         - single-app -> pretty dashboard
-        - host/env without APP -> multi-service health dashboard (by host)
+        - componentized app (DegreeWorks) -> component dashboard
     - otherwise -> RAW
 - url:
     - if --exec and NOT --raw -> URL dashboard
@@ -17,7 +18,7 @@ Behavior:
 Important:
 - Only tool flags are lifted out of the user's command:
     --exec, --all (ctl/tool flags), and --raw (bot-only)
-- Command-specific flags like --lines / --filter MUST stay in order.
+- Command-specific flags like --lines / --filter / --component MUST keep user order.
 """
 
 import os
@@ -26,6 +27,7 @@ import subprocess
 import logging
 import re
 import shutil
+import time
 from typing import Dict, Any, List, Tuple, Optional
 
 from slack_bolt import App
@@ -64,7 +66,7 @@ ALLOWED_CMDS = {"info", "status", "logs", "journal", "url", "stop", "start", "re
 # Bot-only flags (NOT passed to bash)
 BOT_FLAGS = {"--raw"}
 
-# Tool/ctl flags that we DO want to lift out (order doesn't matter for these)
+# Tool/ctl flags that we DO want to lift (order doesn't matter)
 CTL_FLAGS = {"--exec", "--all"}
 
 
@@ -95,16 +97,30 @@ def state_badge(state: Optional[str]) -> str:
     return "⚪"
 
 
+def is_active_icon(is_active: str) -> str:
+    s = (is_active or "").strip().lower()
+    if s == "active":
+        return "🟢"
+    if s in ("inactive", "failed", "dead"):
+        return "🔴"
+    if s in ("activating", "deactivating", "reloading"):
+        return "🟡"
+    return "⚪"
+
+
 def build_usage_text() -> str:
     return (
         f"*{APP_BRAND}* usage:\n"
         f"• `{SLASH_CMD} info <CLIENT> <HOST|ENV> [APP] [--all] [--exec]`\n"
         f"• `{SLASH_CMD} status <CLIENT> <HOST|ENV> [APP] [--all] [--exec]`\n"
-        f"• `{SLASH_CMD} url <CLIENT> <HOST|ENV> <APP> [--exec]`\n"
-        f"• `{SLASH_CMD} restart <CLIENT> <HOST|ENV> <APP> [--all] [--exec]`\n"
-        f"• `{SLASH_CMD} logs <CLIENT> <HOST|ENV> <APP> <logname> [--lines N] [--filter REGEX] [--exec]`\n"
+        f"• `{SLASH_CMD} status <CLIENT> <HOST|ENV> <APP> --component <COMP> [--exec]`\n"
+        f"• `{SLASH_CMD} url <CLIENT> <HOST|ENV> <APP> [--component <COMP>] [--exec]`\n"
+        f"• `{SLASH_CMD} restart <CLIENT> <HOST|ENV> <APP> [--component <COMP>] [--all] [--exec]`\n"
+        f"• `{SLASH_CMD} logs <CLIENT> <HOST|ENV> <APP> [--component <COMP>] <logname> [--lines N] [--filter REGEX] [--exec]`\n"
+        f"• `{SLASH_CMD} journal <CLIENT> <HOST|ENV> <APP> [--component <COMP>] [--lines N] [--exec]`\n"
         f"Flags:\n"
         f"• `--exec` runs via SSH (bash handles execution)\n"
+        f"• `--all` target all hosts when <HOST|ENV> is an environment\n"
         f"• `--raw` forces raw output (no dashboard)\n"
     )
 
@@ -119,7 +135,7 @@ def build_bash_login_command(parts: List[str]) -> List[str]:
 
 def split_flags(parts: List[str]) -> Tuple[List[str], List[str], List[str]]:
     """
-    Keep user argument order for command-specific flags like --lines/--filter.
+    Keep user argument order for command-specific flags like --lines/--filter/--component.
     Only extract:
       - bot_flags: --raw
       - ctl_flags: --exec, --all
@@ -163,9 +179,12 @@ def parse_header_details(output: str) -> Dict[str, str]:
     return info
 
 
-def parse_status_details(output: str) -> Dict[str, str]:
+def parse_status_details_systemctl(output: str) -> Dict[str, str]:
+    """
+    Old path: parse `systemctl status` output (Active:, Since, Memory, Port).
+    This remains used for Tomcat single-app status (BEP/EMA) and component-only status calls.
+    """
     info = parse_header_details(output)
-
     clean = strip_ansi(output)
     lines = [ln.rstrip() for ln in clean.splitlines()]
 
@@ -279,7 +298,7 @@ def to_raw_response(text: str, summary: Optional[Dict[str, str]] = None) -> Dict
     return {"text": "{}\n```{}```".format(header, cleaned)}
 
 
-# ---------- Multi-service status dashboard parsing ----------
+# ---------- Multi-service status dashboard parsing (legacy ALL apps / host) ----------
 def health_icon_from_is_active(state_val: str, listen_val: str) -> str:
     s = (state_val or "").strip().lower()
     l = (listen_val or "").strip().lower()
@@ -294,7 +313,7 @@ def health_icon_from_is_active(state_val: str, listen_val: str) -> str:
     return "⚪"
 
 
-def parse_status_multi(output: str) -> List[Dict[str, Any]]:
+def parse_status_multi_allapps(output: str) -> List[Dict[str, Any]]:
     text = strip_ansi(output or "")
     lines = [ln.rstrip("\n") for ln in text.splitlines()]
 
@@ -427,6 +446,128 @@ def build_status_multi_blocks(sections: List[Dict[str, Any]]) -> List[Dict[str, 
     return blocks
 
 
+# ---------- NEW: Componentized app status parsing (DegreeWorks style) ----------
+def split_host_runs(output: str) -> List[str]:
+    text = strip_ansi(output or "")
+    if "Running on host:" not in text:
+        return [text]
+
+    parts = re.split(r"(?m)^\s*=+\s*\n\s*Running on host:\s*.*\n\s*=+\s*$", text)
+    chunks = [p.strip() for p in parts if p.strip()]
+    return chunks or [text]
+
+
+def parse_component_status_section(section_text: str) -> Optional[Dict[str, Any]]:
+    if "Component:" not in section_text and "Main-State:" not in section_text:
+        return None
+
+    hdr = parse_header_details(section_text)
+    rows: List[Dict[str, str]] = []
+
+    # Main row
+    main_state = ""
+    for ln in section_text.splitlines():
+        m = re.match(r"^\s*Main-State:\s*(.+)\s*$", ln)
+        if m:
+            main_state = m.group(1).strip()
+            break
+
+    service_unit = hdr.get("Service", "")
+    if service_unit or main_state:
+        rows.append({"Name": "MAIN", "Unit": service_unit or "", "State": (main_state or "").strip()})
+
+    # Component rows
+    cur_name = ""
+    cur_state = ""
+    cur_unit = ""
+
+    def flush():
+        nonlocal cur_name, cur_state, cur_unit
+        if cur_name:
+            rows.append({"Name": cur_name, "Unit": cur_unit, "State": cur_state})
+        cur_name, cur_state, cur_unit = "", "", ""
+
+    for ln in section_text.splitlines():
+        m = re.match(r"^\s*Component:\s*(.+)\s*$", ln)
+        if m:
+            flush()
+            cur_name = m.group(1).strip()
+            continue
+        m = re.match(r"^\s*State:\s*(.+)\s*$", ln)
+        if m and cur_name:
+            cur_state = m.group(1).strip()
+            continue
+        m = re.match(r"^\s*Unit\s*:\s*(.+)\s*$", ln)
+        if m and cur_name:
+            cur_unit = m.group(1).strip()
+            continue
+
+    flush()
+
+    if not rows:
+        return None
+
+    return {
+        "Client": hdr.get("Client", "Unknown"),
+        "Host": hdr.get("Host", "Unknown"),
+        "Env": hdr.get("Env", "Unknown"),
+        "App": hdr.get("App", "Unknown"),
+        "rows": rows,
+    }
+
+
+def build_component_status_blocks(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    blocks: List[Dict[str, Any]] = []
+    first = True
+
+    def trunc(s: str, w: int) -> str:
+        s = s or ""
+        return s if len(s) <= w else (s[: max(0, w - 1)] + "…")
+
+    for sec in sections:
+        client = sec.get("Client", "Unknown")
+        host = sec.get("Host", "Unknown")
+        env = sec.get("Env", "Unknown")
+        appn = sec.get("App", "Unknown")
+        rows = sec.get("rows", [])
+
+        green = yellow = red = gray = 0
+        for r in rows:
+            icon = is_active_icon(r.get("State", ""))
+            if icon == "🟢":
+                green += 1
+            elif icon == "🟡":
+                yellow += 1
+            elif icon == "🔴":
+                red += 1
+            else:
+                gray += 1
+
+        summary_line = f"🟢 {green}   🟡 {yellow}   🔴 {red}   ⚪ {gray}"
+
+        if not first:
+            blocks.append({"type": "divider"})
+        first = False
+
+        blocks.append({"type": "header", "text": {"type": "plain_text", "text": f"{appn} — {host} ({env})", "emoji": True}})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Client:* {client}  •  *Units:* {len(rows)}\n{summary_line}"}})
+
+        table_rows: List[str] = []
+        table_rows.append("STATE  COMPONENT            UNIT")
+        table_rows.append("-----  -------------------  ----------------------------------------")
+
+        for r in rows[:120]:
+            icon = is_active_icon(r.get("State", ""))
+            name = trunc(r.get("Name", ""), 19).ljust(19)
+            unit = trunc(r.get("Unit", ""), 40)
+            table_rows.append(f"{icon:<5}  {name}  {unit}")
+
+        table = "```" + "\n".join(table_rows) + "```"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": table}})
+
+    return blocks
+
+
 # ---------- URL dashboard ----------
 def parse_url_result(output: str) -> Tuple[str, str, str]:
     url = ""
@@ -480,6 +621,42 @@ def build_url_dashboard(hdr: Dict[str, str], raw_output: str) -> List[Dict[str, 
     return blocks
 
 
+def _looks_failed(payload: Dict[str, Any]) -> bool:
+    """
+    Determine success/failure based on run_ctl output conventions.
+    - run_ctl returns 'Exit N\n...' on non-zero exit.
+    - Some validations return text starting with 'ERROR:'.
+    """
+    text = (payload.get("text") or "").strip()
+    if text.startswith("Exit "):
+        return True
+    if "ERROR:" in text:
+        return True
+    return False
+
+
+def _decorate_payload(payload: Dict[str, Any], ok: bool, elapsed_s: float, user_text: str) -> Dict[str, Any]:
+    status = "✅ Success" if ok else "❌ Failed"
+    prefix = f"{status}  ·  Completed in {elapsed_s:.2f}s"
+    cmd_line = f"*Command:* `{user_text or '(no args)'}`"
+
+    # If blocks exist (dashboards), add a small section on top
+    if isinstance(payload.get("blocks"), list) and payload["blocks"]:
+        new_blocks: List[Dict[str, Any]] = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": f"{prefix}\n{cmd_line}"}},
+            {"type": "divider"},
+        ] + payload["blocks"]
+        payload["blocks"] = new_blocks
+        # Ensure text exists for fallback
+        payload["text"] = payload.get("text") or (status)
+        return payload
+
+    # Raw text fallback
+    existing = payload.get("text") or ""
+    payload["text"] = f"{prefix}\n{cmd_line}\n{existing}" if existing else f"{prefix}\n{cmd_line}"
+    return payload
+
+
 def run_ctl(user_text: str) -> Dict[str, Any]:
     parts = shlex.split(user_text)
     if not parts:
@@ -503,7 +680,6 @@ def run_ctl(user_text: str) -> Dict[str, Any]:
     exec_mode = ("--exec" in ctl_flags)
     force_raw = ("--raw" in bot_flags)
 
-    # IMPORTANT: keep user order in core, append ctl flags that are safe anywhere
     final_parts = core + ctl_flags
     bash_cmd = build_bash_login_command(final_parts)
 
@@ -525,7 +701,7 @@ def run_ctl(user_text: str) -> Dict[str, Any]:
     combined = ((p.stdout or "") + ("\n" + p.stderr if p.stderr else "")).strip()
     combined_clean = strip_ansi(combined)
 
-    summary_single = parse_status_details(combined_clean) if cmd == "status" else None
+    summary_single = parse_status_details_systemctl(combined_clean) if cmd == "status" else None
 
     if p.returncode != 0:
         return {"text": "Exit {}\n{}".format(p.returncode, to_raw_response(combined_clean, summary_single)["text"])}
@@ -543,13 +719,27 @@ def run_ctl(user_text: str) -> Dict[str, Any]:
         if force_raw or (not exec_mode):
             return to_raw_response(combined_clean, summary_single)
 
+        if "Component:" in combined_clean or "Main-State:" in combined_clean:
+            host_chunks = split_host_runs(combined_clean)
+            parsed_sections: List[Dict[str, Any]] = []
+            for ch in host_chunks:
+                sec = parse_component_status_section(ch)
+                if sec:
+                    parsed_sections.append(sec)
+
+            if parsed_sections:
+                return {"text": "Status", "blocks": build_component_status_blocks(parsed_sections)}
+
         if "App    : <ALL>" in combined_clean and "APP:" in combined_clean:
-            sections = parse_status_multi(combined_clean)
+            sections = parse_status_multi_allapps(combined_clean)
             if sections:
                 return {"text": "Status", "blocks": build_status_multi_blocks(sections)}
             return to_raw_response(combined_clean, summary_single)
 
-        return {"text": "Status", "blocks": build_blocks_like_image(summary_single or {})}
+        if summary_single and summary_single.get("State") and summary_single.get("State") != "UNKNOWN":
+            return {"text": "Status", "blocks": build_blocks_like_image(summary_single or {})}
+
+        return {"text": "```{}```".format(combined_clean[:3900])}
 
     return to_raw_response(combined_clean, summary_single)
 
@@ -558,7 +748,22 @@ def register_commands():
     @app.command(SLASH_CMD)
     def handle_slash(ack, respond, command):
         ack()
-        payload = run_ctl(command.get("text", ""))
+
+        user_text = (command.get("text") or "").strip()
+
+        # Immediate feedback (ephemeral)
+        respond(
+            text=f"🔄 *{APP_BRAND}* is executing:\n`{user_text or '(no args)'}`",
+            response_type="ephemeral",
+        )
+
+        t0 = time.time()
+        payload = run_ctl(user_text)
+        elapsed = time.time() - t0
+
+        ok = not _looks_failed(payload)
+        payload = _decorate_payload(payload, ok=ok, elapsed_s=elapsed, user_text=user_text)
+
         respond(**payload)
 
 register_commands()
