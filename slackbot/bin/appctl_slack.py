@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# -*- Demo socket mode -*-
 """
 AppPilot Slack Bot (Socket Mode + Slash Command)
 
