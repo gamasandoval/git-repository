@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# -*- Demo socket mode -*-
+# -*- Demo socket mode with RBAC -*-
 """
-AppPilot Slack Bot (Socket Mode + Slash Command)
+AppPilot Slack Bot (Socket Mode + Slash Command + RBAC)
 
 Behavior:
 - info -> ALWAYS RAW (inventory output).
@@ -31,6 +31,7 @@ import shutil
 import time
 from typing import Dict, Any, List, Tuple, Optional
 
+import yaml
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
@@ -69,6 +70,15 @@ BOT_FLAGS = {"--raw"}
 
 # Tool/ctl flags that we DO want to lift (order doesn't matter)
 CTL_FLAGS = {"--exec", "--all"}
+
+# RBAC
+RBAC_FILE = "/opt/slackbot/config/rbac.yaml"
+
+ROLE_PERMISSIONS = {
+    "super_admin": {"info", "status", "logs", "journal", "url", "stop", "start", "restart"},
+    "inventory_admin": {"info", "status", "logs", "journal", "url", "stop", "start", "restart"},
+    "inventory_reader": {"info", "status"},
+}
 
 
 def strip_ansi(text: str) -> str:
@@ -155,6 +165,47 @@ def split_flags(parts: List[str]) -> Tuple[List[str], List[str], List[str]]:
             core.append(p)
 
     return core, ctl_flags, bot_flags
+
+
+# ---------------- RBAC HELPERS ----------------
+def load_rbac_config() -> Dict[str, Any]:
+    if not os.path.exists(RBAC_FILE):
+        log.warning("RBAC file not found: %s", RBAC_FILE)
+        return {"users": {}}
+
+    with open(RBAC_FILE, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    if "users" not in data:
+        data["users"] = {}
+
+    return data
+
+
+def is_authorized(user_id: str, action: str, inventory: str, rbac: Dict[str, Any]) -> Tuple[bool, str]:
+    user_cfg = rbac.get("users", {}).get(user_id)
+    if not user_cfg:
+        return False, "You are not authorized to use AppPilot."
+
+    role = user_cfg.get("role")
+    allowed_actions = ROLE_PERMISSIONS.get(role, set())
+
+    if action not in allowed_actions:
+        if role == "inventory_reader":
+            return False, "Read-only role (info, status only)."
+        return False, f"Role '{role}' cannot execute '{action}'."
+
+    if role == "super_admin":
+        return True, "ok"
+
+    allowed_inventories = set(user_cfg.get("inventories", []))
+    if not allowed_inventories:
+        return False, f"Role '{role}' has no inventories assigned."
+
+    if inventory not in allowed_inventories:
+        return False, f"Not allowed for inventory '{inventory}'."
+
+    return True, "ok"
 
 
 def parse_header_details(output: str) -> Dict[str, str]:
@@ -633,6 +684,8 @@ def _looks_failed(payload: Dict[str, Any]) -> bool:
         return True
     if "ERROR:" in text:
         return True
+    if text.startswith("⛔"):
+        return True
     return False
 
 
@@ -658,7 +711,7 @@ def _decorate_payload(payload: Dict[str, Any], ok: bool, elapsed_s: float, user_
     return payload
 
 
-def run_ctl(user_text: str) -> Dict[str, Any]:
+def run_ctl(user_text: str, user_id: str = "") -> Dict[str, Any]:
     parts = shlex.split(user_text)
     if not parts:
         return {"text": build_usage_text()}
@@ -677,6 +730,14 @@ def run_ctl(user_text: str) -> Dict[str, Any]:
     else:
         if len(core) < 4:
             return {"text": f"ERROR: `{cmd}` requires <CLIENT> <HOST|ENV> <APP>\n\n{build_usage_text()}"}
+
+    # RBAC validation
+    inventory = core[1].upper() if len(core) >= 2 else ""
+    rbac = load_rbac_config()
+    authorized, reason = is_authorized(user_id, cmd, inventory, rbac)
+    if not authorized:
+        log.warning("RBAC denied user_id=%s cmd=%s inventory=%s reason=%s", user_id, cmd, inventory, reason)
+        return {"text": f"⛔ {reason}"}
 
     exec_mode = ("--exec" in ctl_flags)
     force_raw = ("--raw" in bot_flags)
@@ -751,6 +812,7 @@ def register_commands():
         ack()
 
         user_text = (command.get("text") or "").strip()
+        user_id = command.get("user_id", "")
 
         # Immediate feedback (ephemeral)
         respond(
@@ -759,13 +821,14 @@ def register_commands():
         )
 
         t0 = time.time()
-        payload = run_ctl(user_text)
+        payload = run_ctl(user_text, user_id=user_id)
         elapsed = time.time() - t0
 
         ok = not _looks_failed(payload)
         payload = _decorate_payload(payload, ok=ok, elapsed_s=elapsed, user_text=user_text)
 
         respond(**payload)
+
 
 register_commands()
 
@@ -775,4 +838,5 @@ if __name__ == "__main__":
     log.info("CTL_BIN=%s", CTL_BIN)
     log.info("CTL_HOME=%s", CTL_HOME)
     log.info("TIMEOUT=%s", TIMEOUT)
+    log.info("RBAC_FILE=%s", RBAC_FILE)
     SocketModeHandler(app, APP_TOKEN).start()
