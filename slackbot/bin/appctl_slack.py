@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# -*- Demo socket mode with RBAC -*-
+# -*- Demo socket mode with RBAC + Audit Logging -*-
 """
-AppPilot Slack Bot (Socket Mode + Slash Command + RBAC)
+AppPilot Slack Bot (Socket Mode + Slash Command + RBAC + Audit Logging)
 
 Behavior:
 - info -> ALWAYS RAW (inventory output).
@@ -29,6 +29,8 @@ import logging
 import re
 import shutil
 import time
+import json
+from logging.handlers import RotatingFileHandler
 from typing import Dict, Any, List, Tuple, Optional
 
 import yaml
@@ -79,6 +81,101 @@ ROLE_PERMISSIONS = {
     "inventory_admin": {"info", "status", "logs", "journal", "url", "stop", "start", "restart"},
     "inventory_reader": {"info", "status"},
 }
+
+# Audit logging
+AUDIT_LOG_FILE = os.environ.get("AUDIT_LOG_FILE", "/opt/slackbot/logs/apppilot-audit.log")
+AUDIT_LOGGER_NAME = "apppilot-audit"
+
+
+def ensure_log_dir(path: str) -> None:
+    log_dir = os.path.dirname(path)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
+
+def setup_audit_logger() -> logging.Logger:
+    logger = logging.getLogger(AUDIT_LOGGER_NAME)
+    logger.setLevel(logging.INFO)
+
+    if logger.handlers:
+        return logger
+
+    ensure_log_dir(AUDIT_LOG_FILE)
+
+    handler = RotatingFileHandler(
+        AUDIT_LOG_FILE,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger
+
+
+audit_log = setup_audit_logger()
+
+
+def parse_audit_fields(user_text: str) -> Dict[str, str]:
+    """
+    Best-effort extraction for audit fields.
+    Expected:
+      info/status <CLIENT> <HOST|ENV> [APP]
+      logs/journal/url/start/stop/restart <CLIENT> <HOST|ENV> <APP> ...
+    """
+    fields = {
+        "action": "",
+        "inventory": "",
+        "target": "",
+        "app": "",
+    }
+
+    try:
+        parts = shlex.split(user_text or "")
+    except Exception:
+        return fields
+
+    if len(parts) >= 1:
+        fields["action"] = parts[0].lower()
+    if len(parts) >= 2:
+        fields["inventory"] = parts[1].upper()
+    if len(parts) >= 3:
+        fields["target"] = parts[2]
+    if len(parts) >= 4:
+        fields["app"] = parts[3]
+
+    return fields
+
+
+def audit_event(
+    *,
+    event: str,
+    user_id: str = "",
+    user_name: str = "",
+    command_text: str = "",
+    status: str = "",
+    reason: str = "",
+    duration_s: float = 0.0,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "event": event,
+        "user_id": user_id,
+        "user_name": user_name,
+        "command": command_text,
+        "status": status,
+        "reason": reason,
+        "duration_s": round(duration_s, 3),
+    }
+    record.update(parse_audit_fields(command_text))
+    if extra:
+        record.update(extra)
+
+    audit_log.info(json.dumps(record, ensure_ascii=False))
 
 
 def strip_ansi(text: str) -> str:
@@ -711,7 +808,7 @@ def _decorate_payload(payload: Dict[str, Any], ok: bool, elapsed_s: float, user_
     return payload
 
 
-def run_ctl(user_text: str, user_id: str = "") -> Dict[str, Any]:
+def run_ctl(user_text: str, user_id: str = "", user_name: str = "") -> Dict[str, Any]:
     parts = shlex.split(user_text)
     if not parts:
         return {"text": build_usage_text()}
@@ -737,6 +834,14 @@ def run_ctl(user_text: str, user_id: str = "") -> Dict[str, Any]:
     authorized, reason = is_authorized(user_id, cmd, inventory, rbac)
     if not authorized:
         log.warning("RBAC denied user_id=%s cmd=%s inventory=%s reason=%s", user_id, cmd, inventory, reason)
+        audit_event(
+            event="rbac_denied",
+            user_id=user_id,
+            user_name=user_name,
+            command_text=user_text,
+            status="DENIED",
+            reason=reason,
+        )
         return {"text": f"⛔ {reason}"}
 
     exec_mode = ("--exec" in ctl_flags)
@@ -758,6 +863,14 @@ def run_ctl(user_text: str, user_id: str = "") -> Dict[str, Any]:
             env=env,
         )
     except Exception as e:
+        audit_event(
+            event="execution_error",
+            user_id=user_id,
+            user_name=user_name,
+            command_text=user_text,
+            status="ERROR",
+            reason=str(e),
+        )
         return {"text": f"Error running {APP_BRAND}: {e}"}
 
     combined = ((p.stdout or "") + ("\n" + p.stderr if p.stderr else "")).strip()
@@ -813,6 +926,15 @@ def register_commands():
 
         user_text = (command.get("text") or "").strip()
         user_id = command.get("user_id", "")
+        user_name = command.get("user_name", "")
+
+        audit_event(
+            event="command_received",
+            user_id=user_id,
+            user_name=user_name,
+            command_text=user_text,
+            status="RECEIVED",
+        )
 
         # Immediate feedback (ephemeral)
         respond(
@@ -821,11 +943,23 @@ def register_commands():
         )
 
         t0 = time.time()
-        payload = run_ctl(user_text, user_id=user_id)
+        payload = run_ctl(user_text, user_id=user_id, user_name=user_name)
         elapsed = time.time() - t0
 
         ok = not _looks_failed(payload)
         payload = _decorate_payload(payload, ok=ok, elapsed_s=elapsed, user_text=user_text)
+
+        audit_event(
+            event="command_completed",
+            user_id=user_id,
+            user_name=user_name,
+            command_text=user_text,
+            status="SUCCESS" if ok else "FAILED",
+            duration_s=elapsed,
+            extra={
+                "response_type": "blocks" if payload.get("blocks") else "text",
+            },
+        )
 
         respond(**payload)
 
@@ -839,4 +973,5 @@ if __name__ == "__main__":
     log.info("CTL_HOME=%s", CTL_HOME)
     log.info("TIMEOUT=%s", TIMEOUT)
     log.info("RBAC_FILE=%s", RBAC_FILE)
+    log.info("AUDIT_LOG_FILE=%s", AUDIT_LOG_FILE)
     SocketModeHandler(app, APP_TOKEN).start()
