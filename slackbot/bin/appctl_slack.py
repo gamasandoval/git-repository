@@ -58,7 +58,7 @@ if not CTL_BIN:
     else:
         CTL_BIN = APPCTL_BIN
 
-CTL_HOME = os.environ.get("CTL_HOME", os.environ.get("APPCTL_HOME", "/home/mobaxterm"))
+CTL_HOME = os.environ.get("CTL_HOME", os.environ.get("APPCTL_HOME", "/opt/slackbot"))
 
 try:
     TIMEOUT = int(os.environ.get("CTL_TIMEOUT", os.environ.get("APPCTL_TIMEOUT", "30")))
@@ -451,8 +451,11 @@ def to_raw_response(text: str, summary: Optional[Dict[str, str]] = None) -> Dict
 def health_icon_from_is_active(state_val: str, listen_val: str) -> str:
     s = (state_val or "").strip().lower()
     l = (listen_val or "").strip().lower()
-    if s == "active" and l == "listening":
+
+    if s == "active" and l in ("listening", "composite"):
         return "🟢"
+    if s in ("degraded", "warning"):
+        return "🟡"
     if s == "active":
         return "🟡"
     if s in ("failed", "inactive", "dead"):
@@ -474,7 +477,7 @@ def parse_status_multi_allapps(output: str) -> List[Dict[str, Any]]:
     rx_host = re.compile(r"^\s*Host\s*:\s*(.+)\s*$")
     rx_env = re.compile(r"^\s*Env\s*:\s*(.+)\s*$")
     rx_app = re.compile(r"^\s*APP:\s*(.+)\s*$")
-    rx_kv = re.compile(r"^\s{2}([A-Za-z ]+)\s*:\s*(.+)\s*$")
+    rx_kv = re.compile(r"^\s{2}([A-Za-z ][A-Za-z0-9 _-]*)\s*:\s*(.+)\s*$")
 
     def flush_app():
         nonlocal cur_app, cur
@@ -519,13 +522,22 @@ def parse_status_multi_allapps(output: str) -> List[Dict[str, Any]]:
             if not cur:
                 cur = {"Client": "", "Host": "", "Env": "", "apps": []}
             flush_app()
-            cur_app = {"App": m.group(1).strip(), "Service": "", "Port": "", "RunAs": "", "State": "", "Listen": ""}
+            cur_app = {
+                "App": m.group(1).strip(),
+                "Service": "",
+                "Port": "",
+                "RunAs": "",
+                "State": "",
+                "Listen": "",
+                "Components": "",
+            }
             continue
 
         m = rx_kv.match(ln)
         if m and cur_app is not None:
             key = m.group(1).strip().lower()
             val = m.group(2).strip()
+
             if key.startswith("service"):
                 cur_app["Service"] = val
             elif key.startswith("port"):
@@ -536,11 +548,12 @@ def parse_status_multi_allapps(output: str) -> List[Dict[str, Any]]:
                 cur_app["State"] = val
             elif key.startswith("listen"):
                 cur_app["Listen"] = val
+            elif key.startswith("components"):
+                cur_app["Components"] = val
             continue
 
     flush_section()
     return sections
-
 
 def build_status_multi_blocks(sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     blocks: List[Dict[str, Any]] = []
@@ -574,20 +587,34 @@ def build_status_multi_blocks(sections: List[Dict[str, Any]]) -> List[Dict[str, 
             blocks.append({"type": "divider"})
         first = False
 
-        blocks.append({"type": "header", "text": {"type": "plain_text", "text": f"Environment Status — {host} ({env})", "emoji": True}})
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*Client:* {client}  •  *Services:* {len(apps)}\n{summary_line}"}})
+        blocks.append({
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"Environment Status — {host} ({env})",
+                "emoji": True,
+            },
+        })
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Client:* {client}  •  *Services:* {len(apps)}\n{summary_line}",
+            },
+        })
 
         rows: List[str] = []
-        rows.append("HEALTH  APP               PORT   LISTEN        SERVICE")
-        rows.append("------  ----------------  -----  ------------  ------------------------------")
+        rows.append("HEALTH  APP               PORT   LISTEN        COMPONENTS        SERVICE")
+        rows.append("------  ----------------  -----  ------------  ----------------  ------------------------------")
 
         for a in apps:
             icon = health_icon_from_is_active(a.get("State", ""), a.get("Listen", ""))
             appn = trunc(a.get("App", ""), 16).ljust(16)
             port = trunc(a.get("Port", ""), 5).ljust(5)
             listen = trunc(a.get("Listen", ""), 12).ljust(12)
+            comps = trunc(a.get("Components", "") or "-", 16).ljust(16)
             svc = trunc(a.get("Service", ""), 30)
-            rows.append(f"{icon:<6}  {appn}  {port}  {listen}  {svc}")
+            rows.append(f"{icon:<6}  {appn}  {port}  {listen}  {comps}  {svc}")
 
         table = "```" + "\n".join(rows[:120]) + "```"
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": table}})
