@@ -1,0 +1,22 @@
+# ============================================================
+# bep.conf.systemd.example
+# BEP - systemd - shared Tomcat
+# ============================================================
+
+SERVICE_TYPE="systemd"
+SERVICE_NAME="tc_BEP_PPRD_8002.service"
+
+TOMCAT_ROOT="/u01/app/tomcat"
+
+# Optional.
+# If omitted, the script derives latest<major>, e.g. latest10.
+# TOMCAT_LINK="/u01/app/tomcat/latest10"
+
+CATALINA_BASE="/u01/app/tomcat/tc_PPRD_8002"
+
+HEALTH_URL="https://host.example.edu:8002/BannerEventPublisher/login/auth"
+
+STARTUP_DELAY=15
+
+ALLOW_SHARED_LINK="true"
+SHARED_APPS="bep brim"
