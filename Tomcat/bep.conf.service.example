@@ -1,0 +1,22 @@
+# ============================================================
+# bep.conf.service.example
+# BEP - SysV service - shared Tomcat
+# ============================================================
+
+SERVICE_TYPE="service"
+SERVICE_NAME="tc_PPRD_8002"
+
+TOMCAT_ROOT="/u01/app/tomcat"
+
+TOMCAT_LINK="/u01/app/tomcat/latest10"
+
+# Required for SERVICE_TYPE=service.
+CATALINA_HOME="/u01/app/tomcat/latest10"
+CATALINA_BASE="/u01/app/tomcat/tc_PPRD_8002"
+
+HEALTH_URL="https://host.example.edu:8002/BannerEventPublisher/login/auth"
+
+STARTUP_DELAY=15
+
+ALLOW_SHARED_LINK="true"
+SHARED_APPS="bep brim"
