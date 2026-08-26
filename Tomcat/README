@@ -1,0 +1,13 @@
+- <app>.conf must match the value passed with --app.
+- SERVICE_TYPE supports: systemd, service.
+- CATALINA_HOME is required in service mode.
+- In systemd mode, CATALINA_HOME is discovered from the unit.
+- TOMCAT_LINK is optional:
+    if omitted -> ${TOMCAT_ROOT}/latest<major>
+    if defined -> exact configured symlink is used.
+- CATALINA_HOME and CATALINA_BASE must be different.
+- For shared Tomcat:
+    ALLOW_SHARED_LINK="true"
+    SHARED_APPS must be identical and in the same order in every member config.
+- SHARED_APPS order controls startup and validation order.
+- STARTUP_DELAY may be different for each application.
