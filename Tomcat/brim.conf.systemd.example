@@ -1,0 +1,22 @@
+# ============================================================
+# brim.conf.systemd.example
+# BRIM - systemd - shared Tomcat
+# ============================================================
+
+SERVICE_TYPE="systemd"
+SERVICE_NAME="tc_BRIM_PPRD_8003.service"
+
+TOMCAT_ROOT="/u01/app/tomcat"
+
+# Optional.
+# If omitted, the script derives latest<major>, e.g. latest10.
+# TOMCAT_LINK="/u01/app/tomcat/latest10"
+
+CATALINA_BASE="/u01/app/tomcat/tc_PPRD_8003"
+
+HEALTH_URL="https://host.example.edu:8003/brim/login/auth"
+
+STARTUP_DELAY=15
+
+ALLOW_SHARED_LINK="true"
+SHARED_APPS="bep brim"
