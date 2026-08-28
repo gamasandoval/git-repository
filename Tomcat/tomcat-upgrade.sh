@@ -4,50 +4,42 @@
 #
 # Generic Apache Tomcat minor/patch upgrade utility.
 #
-# Supported service types:
-#
+# Supported service managers:
 #   SERVICE_TYPE="systemd"
 #   SERVICE_TYPE="service"
 #
-# Supported actions:
-#
+# Actions:
 #   --check
 #   --dryrun
 #   --upgrade
 #
-# Application configuration:
-#
+# Configuration:
 #   /u01/app/tomcat/upgrade-config/<app>.conf
 #
-# Single application example:
+# Optional functional health validation:
 #
-#   SERVICE_TYPE="systemd"
-#   SERVICE_NAME="tc_APP_PROD_8080.service"
-#   TOMCAT_ROOT="/u01/app/tomcat"
-#   CATALINA_BASE="/u01/app/tomcat/tc_APP_PROD_8080"
-#   HEALTH_URL="https://host:8080/app"
-#   STARTUP_DELAY=10
+#   HEALTH_URL="https://host:port/application"
 #
-# Shared Tomcat example:
+# If HEALTH_URL is configured:
+#   - pre-upgrade HTTP health is required
+#   - post-upgrade HTTP health is required
+#   - failure causes rollback
+#
+# If HEALTH_URL is omitted:
+#   - service startup is still required
+#   - JVM HOME/BASE validation is still required
+#   - Tomcat version validation is still required
+#   - HTTP validation is skipped
+#
+# Shared Tomcat:
 #
 #   ALLOW_SHARED_LINK="true"
-#   SHARED_APPS="brim bep"
+#   SHARED_APPS="app1 app2 app3"
 #
-# IMPORTANT:
+# Every member of the shared group must declare the same SHARED_APPS
+# value in the same order.
 #
-#   SHARED_APPS order defines startup and validation order.
-#
-#   Example:
-#
-#       SHARED_APPS="brim bep"
-#
-#   means:
-#
-#       1. Start and fully validate BRIM
-#       2. Only if BRIM passes, start and validate BEP
-#
-#   If any application fails, the entire shared Tomcat upgrade
-#   is rolled back.
+# SHARED_APPS order controls sequential startup/validation.
 #
 
 set -Eeuo pipefail
@@ -59,29 +51,19 @@ set -Eeuo pipefail
 
 CONFIG_DIR="/u01/app/tomcat/upgrade-config"
 
-#
-# Use the CDN for version discovery.
-#
+# Version discovery.
 APACHE_BASE_URL="https://dlcdn.apache.org/tomcat"
 
-#
-# Use the Apache archive for the actual binary download.
-#
+# Binary download.
 APACHE_DOWNLOAD_URL="https://archive.apache.org/dist/tomcat"
 
 WORK_ROOT="/tmp"
 
-#
-# Archive downloads may be slow.
-#
+# Archive downloads can be slow.
 CURL_TIMEOUT=600
 
-#
 # Maximum time to wait for a Tomcat process to become active.
-#
 START_TIMEOUT=60
-
-FAIL_ON_LOG_ERRORS="false"
 
 
 # ============================================================
@@ -155,7 +137,7 @@ ERRORS=0
 
 
 # ============================================================
-# SHARED APPLICATION RUNTIME ARRAYS
+# SHARED APPLICATION RUNTIME
 # ============================================================
 
 declare -a SHARED_APP_LIST=()
@@ -184,9 +166,12 @@ declare -A SH_JULI_BACKUP
 
 declare -A SH_BACKUP_DIR
 
+SHARED_APPS_EXPECTED=""
+SHARED_TOMCAT_LINK_EXPECTED=""
+
 
 # ============================================================
-# OUTPUT FUNCTIONS
+# OUTPUT
 # ============================================================
 
 info()
@@ -223,7 +208,7 @@ line()
 
 
 # ============================================================
-# APPLICATION VALIDATION
+# APPLICATION CONFIGURATION
 # ============================================================
 
 validate_app_name()
@@ -249,10 +234,6 @@ validate_application()
 }
 
 
-# ============================================================
-# PRIMARY APPLICATION CONFIGURATION
-# ============================================================
-
 load_application_config()
 {
     local config_file
@@ -277,14 +258,12 @@ load_application_config()
     [[ -n "${CATALINA_BASE}" ]] || \
         die "CATALINA_BASE is not defined in ${config_file}"
 
-    [[ -n "${HEALTH_URL}" ]] || \
-        die "HEALTH_URL is not defined in ${config_file}"
-
     [[ -d "${TOMCAT_ROOT}" ]] || \
         die "TOMCAT_ROOT does not exist: ${TOMCAT_ROOT}"
 
     BACKUP_ROOT="${TOMCAT_ROOT}/upgrade-backups"
 
+    HEALTH_URL="${HEALTH_URL:-}"
     STARTUP_DELAY="${STARTUP_DELAY:-10}"
     ALLOW_SHARED_LINK="${ALLOW_SHARED_LINK:-false}"
     SHARED_APPS="${SHARED_APPS:-}"
@@ -301,20 +280,15 @@ load_application_config()
     esac
 
     case "${SERVICE_TYPE}" in
-
         systemd)
             ;;
-
         service)
-
             [[ -n "${CATALINA_HOME}" ]] || \
                 die "CATALINA_HOME is required when SERVICE_TYPE=service"
             ;;
-
         *)
             die "Invalid SERVICE_TYPE: ${SERVICE_TYPE}. Supported values: systemd, service"
             ;;
-
     esac
 }
 
@@ -332,42 +306,24 @@ require_command()
 
 check_requirements()
 {
-    require_command curl
-    require_command awk
-    require_command grep
-    require_command sed
-    require_command sort
-    require_command readlink
-    require_command sha512sum
-    require_command tar
-    require_command install
-    require_command stat
-    require_command tr
-    require_command cut
-    require_command head
-    require_command tail
-    require_command wc
-    require_command cp
-    require_command ln
-    require_command pgrep
-    require_command ps
-    require_command id
-    require_command sleep
-    require_command date
+    local command
+
+    for command in \
+        curl awk grep sed sort readlink sha512sum tar install stat \
+        tr cut head tail wc cp ln pgrep ps id sleep date
+    do
+        require_command "${command}"
+    done
 
     case "${SERVICE_TYPE}" in
-
         systemd)
             require_command systemctl
             require_command journalctl
             ;;
-
         service)
-
             [[ -x "/usr/sbin/service" ]] || \
                 die "/usr/sbin/service was not found or is not executable."
             ;;
-
     esac
 
     [[ -d "${TOMCAT_ROOT}" ]] || \
@@ -380,9 +336,8 @@ check_requirements()
 
 require_root()
 {
-    if [[ "$(id -u)" -ne 0 ]]; then
+    [[ "$(id -u)" -eq 0 ]] || \
         die "--upgrade must be executed as root."
-    fi
 }
 
 
@@ -396,15 +351,12 @@ service_start_values()
     local name="$2"
 
     case "${type}" in
-
         systemd)
             systemctl start "${name}"
             ;;
-
         service)
             /usr/sbin/service "${name}" start
             ;;
-
         *)
             return 1
             ;;
@@ -418,15 +370,12 @@ service_stop_values()
     local name="$2"
 
     case "${type}" in
-
         systemd)
             systemctl stop "${name}"
             ;;
-
         service)
             /usr/sbin/service "${name}" stop
             ;;
-
         *)
             return 1
             ;;
@@ -440,15 +389,12 @@ service_is_active_values()
     local name="$2"
 
     case "${type}" in
-
         systemd)
             systemctl is-active --quiet "${name}"
             ;;
-
         service)
             /usr/sbin/service "${name}" status >/dev/null 2>&1
             ;;
-
         *)
             return 1
             ;;
@@ -463,9 +409,7 @@ get_service_pid_values()
     local base="$3"
 
     case "${type}" in
-
         systemd)
-
             systemctl show \
                 "${name}" \
                 -p MainPID \
@@ -473,30 +417,34 @@ get_service_pid_values()
             ;;
 
         service)
-
             pgrep -f "\-Dcatalina.base=${base}" \
                 | head -1 || true
             ;;
-
     esac
 }
 
 
 service_start()
 {
-    service_start_values "${SERVICE_TYPE}" "${SERVICE_NAME}"
+    service_start_values \
+        "${SERVICE_TYPE}" \
+        "${SERVICE_NAME}"
 }
 
 
 service_stop()
 {
-    service_stop_values "${SERVICE_TYPE}" "${SERVICE_NAME}"
+    service_stop_values \
+        "${SERVICE_TYPE}" \
+        "${SERVICE_NAME}"
 }
 
 
 service_is_active()
 {
-    service_is_active_values "${SERVICE_TYPE}" "${SERVICE_NAME}"
+    service_is_active_values \
+        "${SERVICE_TYPE}" \
+        "${SERVICE_NAME}"
 }
 
 
@@ -549,36 +497,35 @@ get_systemd_environment_value_values()
 
 get_systemd_property()
 {
-    get_systemd_property_values "${SERVICE_NAME}" "$1"
+    get_systemd_property_values \
+        "${SERVICE_NAME}" \
+        "$1"
 }
 
 
 get_systemd_environment_value()
 {
-    get_systemd_environment_value_values "${SERVICE_NAME}" "$1"
+    get_systemd_environment_value_values \
+        "${SERVICE_NAME}" \
+        "$1"
 }
 
 
 # ============================================================
-# PRIMARY SERVICE VALIDATION
+# SERVICE VALIDATION
 # ============================================================
 
 validate_service()
 {
     case "${SERVICE_TYPE}" in
-
         systemd)
-
             systemctl cat "${SERVICE_NAME}" >/dev/null 2>&1 || \
                 die "systemd service not found: ${SERVICE_NAME}"
             ;;
-
         service)
-
             [[ -e "/etc/init.d/${SERVICE_NAME}" ]] || \
                 die "service not found: ${SERVICE_NAME}"
             ;;
-
     esac
 }
 
@@ -629,7 +576,9 @@ detect_process_identity()
 
     if [[ -e "/proc/${RUNNING_PID}/exe" ]]; then
 
-        JAVA_BIN="$(readlink -f "/proc/${RUNNING_PID}/exe")"
+        JAVA_BIN="$(
+            readlink -f "/proc/${RUNNING_PID}/exe"
+        )"
 
         if [[ "${JAVA_BIN}" == */bin/java ]]; then
             JAVA_HOME="${JAVA_BIN%/bin/java}"
@@ -639,13 +588,12 @@ detect_process_identity()
 
 
 # ============================================================
-# PRIMARY SERVICE CONFIGURATION
+# SERVICE CONFIGURATION
 # ============================================================
 
 read_service_configuration()
 {
     case "${SERVICE_TYPE}" in
-
         systemd)
 
             SERVICE_USER="$(get_systemd_property User)"
@@ -678,11 +626,14 @@ read_service_configuration()
             [[ "${CONFIGURED_BASE}" == "${CATALINA_BASE}" ]] || \
                 die "CATALINA_BASE mismatch. Expected ${CATALINA_BASE}, found ${CONFIGURED_BASE}"
 
-            if [[ -n "${JAVA_HOME}" && -e "${JAVA_HOME}/bin/java" ]]; then
-                JAVA_BIN="$(readlink -f "${JAVA_HOME}/bin/java")"
+            if [[ -n "${JAVA_HOME}" &&
+                  -e "${JAVA_HOME}/bin/java" ]]
+            then
+                JAVA_BIN="$(
+                    readlink -f "${JAVA_HOME}/bin/java"
+                )"
             fi
             ;;
-
 
         service)
 
@@ -691,7 +642,6 @@ read_service_configuration()
 
             detect_process_identity
             ;;
-
     esac
 
     [[ -e "${CONFIGURED_HOME}" ]] || \
@@ -711,17 +661,10 @@ read_service_configuration()
 }
 
 
-# ============================================================
-# HOME / BASE
-# ============================================================
-
 validate_home_base_layout()
 {
-    if [[ "${REAL_HOME}" == "${REAL_BASE}" ]]; then
-
-        die "CATALINA_HOME and CATALINA_BASE resolve to the same directory: ${REAL_HOME}. Automatic upgrade requires separate HOME and BASE directories."
-
-    fi
+    [[ "${REAL_HOME}" != "${REAL_BASE}" ]] || \
+        die "CATALINA_HOME and CATALINA_BASE resolve to the same directory: ${REAL_HOME}"
 
     info "CATALINA_HOME and CATALINA_BASE are separate."
 }
@@ -766,7 +709,9 @@ detect_current_version()
     [[ -x "${REAL_HOME}/bin/version.sh" ]] || \
         die "Tomcat version.sh not found under ${REAL_HOME}"
 
-    CURRENT_VERSION="$(get_tomcat_version "${REAL_HOME}")"
+    CURRENT_VERSION="$(
+        get_tomcat_version "${REAL_HOME}"
+    )"
 
     [[ -n "${CURRENT_VERSION}" ]] || \
         die "Could not determine installed Tomcat version."
@@ -811,7 +756,9 @@ detect_managed_link()
     [[ -L "${TOMCAT_LINK}" ]] || \
         die "Managed Tomcat path does not exist or is not a symbolic link: ${TOMCAT_LINK}"
 
-    TOMCAT_LINK_TARGET="$(readlink -f "${TOMCAT_LINK}")"
+    TOMCAT_LINK_TARGET="$(
+        readlink -f "${TOMCAT_LINK}"
+    )"
 
     [[ -d "${TOMCAT_LINK_TARGET}" ]] || \
         die "Managed Tomcat symlink target does not exist: ${TOMCAT_LINK_TARGET}"
@@ -845,9 +792,7 @@ check_instance_files()
         info "${CATALINA_BASE}/bin/setenv.sh"
 
     else
-
         warn "No instance setenv.sh detected."
-
     fi
 
     if [[ -f "${CATALINA_BASE}/bin/tomcat-juli.jar" ]]; then
@@ -856,7 +801,7 @@ check_instance_files()
 
         JULI_MODE="$(
             stat -c '%a' \
-            "${CATALINA_BASE}/bin/tomcat-juli.jar"
+                "${CATALINA_BASE}/bin/tomcat-juli.jar"
         )"
 
         info "Instance-specific tomcat-juli.jar detected:"
@@ -869,7 +814,6 @@ check_instance_files()
         JULI_MODE=""
 
         info "No instance-specific tomcat-juli.jar detected."
-
     fi
 }
 
@@ -943,6 +887,8 @@ health_url_check()
 
 validate_health_url()
 {
+    [[ -n "${HEALTH_URL:-}" ]] || return 0
+
     info "Checking application health URL:"
     info "${HEALTH_URL}"
 
@@ -952,6 +898,14 @@ validate_health_url()
 
 validate_preupgrade_health()
 {
+    if [[ -z "${HEALTH_URL:-}" ]]; then
+
+        info "No HEALTH_URL configured."
+        info "Application functional health precheck will be skipped."
+
+        return 0
+    fi
+
     if validate_health_url; then
         info "Application health precheck passed."
     else
@@ -965,6 +919,8 @@ health_url_retry_values()
     local url="$1"
     local delay="$2"
     local elapsed=0
+
+    [[ -n "${url}" ]] || return 0
 
     info "Waiting ${delay} seconds before application health check..."
 
@@ -986,6 +942,14 @@ health_url_retry_values()
 
 validate_health_url_retry()
 {
+    if [[ -z "${HEALTH_URL:-}" ]]; then
+
+        info "No HEALTH_URL configured."
+        info "Application functional health validation skipped."
+
+        return 0
+    fi
+
     health_url_retry_values \
         "${HEALTH_URL}" \
         "${STARTUP_DELAY}"
@@ -1057,14 +1021,14 @@ get_link_references()
             2>/dev/null || true
     )"
 
-    printf '%s\n' "${matches}" |
-        sed '/^[[:space:]]*$/d' |
-        sort -u
+    printf '%s\n' "${matches}" \
+        | sed '/^[[:space:]]*$/d' \
+        | sort -u
 }
 
 
 # ============================================================
-# READ A SHARED APPLICATION CONFIG
+# SHARED APPLICATION CONFIG
 # ============================================================
 
 load_shared_app_config()
@@ -1094,7 +1058,9 @@ load_shared_app_config()
     local user=""
     local group=""
 
-    # Preserve primary application globals while loading shared configs.
+    #
+    # Preserve primary application globals.
+    #
     local saved_SERVICE_TYPE="${SERVICE_TYPE}"
     local saved_SERVICE_NAME="${SERVICE_NAME}"
     local saved_TOMCAT_ROOT="${TOMCAT_ROOT}"
@@ -1113,10 +1079,6 @@ load_shared_app_config()
     [[ -f "${config_file}" ]] || \
         die "Shared application config not found: ${config_file}"
 
-    #
-    # Load the shared config in a subshell-like isolated scope by
-    # explicitly copying values after sourcing.
-    #
     SERVICE_TYPE=""
     SERVICE_NAME=""
     TOMCAT_ROOT=""
@@ -1137,7 +1099,7 @@ load_shared_app_config()
     c_tomcat_link="${TOMCAT_LINK:-}"
     c_catalina_home="${CATALINA_HOME:-}"
     c_catalina_base="${CATALINA_BASE}"
-    c_health_url="${HEALTH_URL}"
+    c_health_url="${HEALTH_URL:-}"
     c_startup_delay="${STARTUP_DELAY:-10}"
     c_allow_shared="${ALLOW_SHARED_LINK:-false}"
     c_shared_apps="${SHARED_APPS:-}"
@@ -1159,9 +1121,6 @@ load_shared_app_config()
 
     [[ -n "${c_catalina_base}" ]] || \
         die "CATALINA_BASE missing from ${app}.conf"
-
-    [[ -n "${c_health_url}" ]] || \
-        die "HEALTH_URL missing from ${app}.conf"
 
     [[ "${c_startup_delay}" =~ ^[0-9]+$ ]] || \
         die "Invalid STARTUP_DELAY in ${app}.conf"
@@ -1203,7 +1162,6 @@ load_shared_app_config()
             )"
             ;;
 
-
         service)
 
             [[ -e "/etc/init.d/${c_service_name}" ]] || \
@@ -1213,12 +1171,9 @@ load_shared_app_config()
                 die "${app}: CATALINA_HOME required for service mode."
             ;;
 
-
         *)
-
             die "${app}: unsupported SERVICE_TYPE=${c_service_type}"
             ;;
-
     esac
 
     service_is_active_values \
@@ -1269,24 +1224,21 @@ load_shared_app_config()
         cut -d. -f1-2
     )"
 
-    #
-    # Determine the expected managed link.
-    #
     if [[ -z "${c_tomcat_link}" ]]; then
         c_tomcat_link="${c_tomcat_root}/latest${app_major}"
     fi
 
     [[ "${c_catalina_home}" == "${c_tomcat_link}" ]] || \
-        die "${app}: CATALINA_HOME does not match managed TOMCAT_LINK. Expected=${c_tomcat_link}, Found=${c_catalina_home}"
+        die "${app}: CATALINA_HOME does not match managed TOMCAT_LINK."
 
     [[ "${c_tomcat_link}" == "${SHARED_TOMCAT_LINK_EXPECTED}" ]] || \
-        die "${app}: managed Tomcat link differs from shared group. Expected=${SHARED_TOMCAT_LINK_EXPECTED}, Found=${c_tomcat_link}"
+        die "${app}: managed Tomcat link differs from shared group."
 
     [[ "${real_home}" == "${REAL_HOME}" ]] || \
-        die "${app}: physical Tomcat HOME differs from shared group. Expected=${REAL_HOME}, Found=${real_home}"
+        die "${app}: physical Tomcat HOME differs from shared group."
 
     [[ "${app_version_normalized}" == "${CURRENT_VERSION_COMPARE}" ]] || \
-        die "${app}: Tomcat version differs from shared group. Expected=${CURRENT_VERSION_COMPARE}, Found=${app_version_normalized}"
+        die "${app}: Tomcat version differs from shared group."
 
     [[ "${app_branch}" == "${CURRENT_BRANCH}" ]] || \
         die "${app}: Tomcat branch differs from shared group."
@@ -1302,17 +1254,24 @@ load_shared_app_config()
     fi
 
     #
-    # Pre-upgrade health validation.
+    # Functional health is optional.
     #
-    info "Checking shared application health: ${app}"
-    info "${c_health_url}"
+    if [[ -n "${c_health_url}" ]]; then
 
-    health_url_check "${c_health_url}" || \
-        die "${app}: application health precheck failed."
+        info "Checking shared application health: ${app}"
+        info "${c_health_url}"
 
-    #
-    # Store application metadata.
-    #
+        health_url_check "${c_health_url}" || \
+            die "${app}: application health precheck failed."
+
+        info "${app}: application health precheck passed."
+
+    else
+
+        info "${app}: no HEALTH_URL configured."
+        info "${app}: functional health precheck skipped."
+    fi
+
     SH_SERVICE_TYPE["${app}"]="${c_service_type}"
     SH_SERVICE_NAME["${app}"]="${c_service_name}"
 
@@ -1346,7 +1305,9 @@ load_shared_app_config()
         SH_JULI_MODE["${app}"]=""
     fi
 
+    #
     # Restore primary application globals.
+    #
     SERVICE_TYPE="${saved_SERVICE_TYPE}"
     SERVICE_NAME="${saved_SERVICE_NAME}"
     TOMCAT_ROOT="${saved_TOMCAT_ROOT}"
@@ -1371,6 +1332,7 @@ validate_shared_group()
     local app
     local references
     local reference_count
+    local found_primary="false"
 
     SHARED_APP_LIST=()
 
@@ -1379,16 +1341,8 @@ validate_shared_group()
     (( ${#SHARED_APP_LIST[@]} >= 2 )) || \
         die "SHARED_APPS must contain at least two applications."
 
-    #
-    # Primary application must be part of the group.
-    #
-    local found_primary="false"
-
     for app in "${SHARED_APP_LIST[@]}"; do
-
-        if [[ "${app}" == "${APP}" ]]; then
-            found_primary="true"
-        fi
+        [[ "${app}" == "${APP}" ]] && found_primary="true"
     done
 
     [[ "${found_primary}" == "true" ]] || \
@@ -1431,7 +1385,6 @@ validate_shared_group()
 
         warn "Shared Tomcat link explicitly allowed."
         warn "Upgrade will coordinate all applications declared in SHARED_APPS."
-
     fi
 
     echo
@@ -1441,10 +1394,6 @@ validate_shared_group()
     echo
 }
 
-
-# ============================================================
-# SHARED LINK MODE SELECTION
-# ============================================================
 
 check_shared_link()
 {
@@ -1472,17 +1421,11 @@ check_shared_link()
     warn "${TOMCAT_LINK} is referenced by multiple services:"
     printf '%s\n' "${references}"
 
-    if [[ "${ALLOW_SHARED_LINK}" != "true" ]]; then
-
+    [[ "${ALLOW_SHARED_LINK}" == "true" ]] || \
         die "Upgrade refused because the managed Tomcat symlink is shared."
 
-    fi
-
-    if [[ -z "${SHARED_APPS}" ]]; then
-
+    [[ -n "${SHARED_APPS}" ]] || \
         die "Managed Tomcat link is shared and ALLOW_SHARED_LINK=true, but SHARED_APPS is not configured."
-
-    fi
 
     validate_shared_group
 }
@@ -1540,22 +1483,26 @@ show_check_report()
     printf "%-28s : %s\n" "Tomcat major" "${CURRENT_MAJOR}"
     printf "%-28s : %s.x\n" "Tomcat branch" "${CURRENT_BRANCH}"
     printf "%-28s : %s\n" "Latest available" "${LATEST_VERSION}"
-    printf "%-28s : %s\n" "Health URL" "${HEALTH_URL}"
+
+    if [[ -n "${HEALTH_URL:-}" ]]; then
+        printf "%-28s : %s\n" "Health URL" "${HEALTH_URL}"
+        printf "%-28s : %s\n" "Health validation" "ENABLED"
+    else
+        printf "%-28s : %s\n" "Health URL" "not configured"
+        printf "%-28s : %s\n" "Health validation" "DISABLED"
+    fi
+
     printf "%-28s : %s seconds\n" "Startup delay" "${STARTUP_DELAY}"
 
     echo
     line
 
     if [[ "${CURRENT_VERSION_COMPARE}" == "${LATEST_VERSION}" ]]; then
-
         echo " NO UPGRADE REQUIRED"
-
     else
-
         echo " UPGRADE AVAILABLE"
         echo
         echo " ${CURRENT_VERSION} -> ${LATEST_VERSION}"
-
     fi
 
     line
@@ -1588,10 +1535,6 @@ run_prechecks()
     get_latest_version
 }
 
-
-# ============================================================
-# CHECK
-# ============================================================
 
 perform_check()
 {
@@ -1650,16 +1593,14 @@ perform_dryrun()
         line
         echo " DRY RUN COMPLETE - NO CHANGES WERE MADE"
         line
+
         return 0
     fi
 
     echo "STEP ${step} - Download Tomcat ${LATEST_VERSION}"
     echo
-    echo "  curl --fail --location --show-error \\"
-    echo "    ${download_url} \\"
-    echo "    -o /tmp/${filename}"
+    echo "  ${download_url}"
     echo
-
     step=$((step + 1))
 
     echo "STEP ${step} - Download and validate SHA-512 checksum"
@@ -1667,31 +1608,28 @@ perform_dryrun()
     echo "  ${checksum_url}"
     echo "  sha512sum -c ${filename}.sha512"
     echo
-
     step=$((step + 1))
 
     echo "STEP ${step} - Extract and validate Tomcat"
     echo
     echo "  ${NEW_HOME}"
     echo
-
     step=$((step + 1))
 
-    if [[ -n "${SHARED_APPS}" && "${ALLOW_SHARED_LINK}" == "true" ]]; then
+    if [[ -n "${SHARED_APPS}" &&
+          "${ALLOW_SHARED_LINK}" == "true" ]]
+    then
 
         echo "STEP ${step} - Create backups for all shared applications"
         echo
 
         for app in "${SHARED_APP_LIST[@]}"; do
-
             echo "  ${app}"
             echo "    BASE    : ${SH_CATALINA_BASE[$app]}"
             echo "    SERVICE : ${SH_SERVICE_NAME[$app]}"
-
         done
 
         echo
-
         step=$((step + 1))
 
         echo "STEP ${step} - Stop ALL shared applications"
@@ -1700,27 +1638,22 @@ perform_dryrun()
         for app in "${SHARED_APP_LIST[@]}"; do
 
             case "${SH_SERVICE_TYPE[$app]}" in
-
                 systemd)
                     echo "  systemctl stop ${SH_SERVICE_NAME[$app]}"
                     ;;
-
                 service)
                     echo "  /usr/sbin/service ${SH_SERVICE_NAME[$app]} stop"
                     ;;
-
             esac
         done
 
         echo
-
         step=$((step + 1))
 
         echo "STEP ${step} - Switch shared Tomcat link"
         echo
         echo "  ln -sfn ${NEW_HOME} ${TOMCAT_LINK}"
         echo
-
         step=$((step + 1))
 
         for app in "${SHARED_APP_LIST[@]}"; do
@@ -1731,16 +1664,25 @@ perform_dryrun()
             echo "  HOME       : ${SH_TOMCAT_LINK[$app]}"
             echo "  BASE       : ${SH_CATALINA_BASE[$app]}"
             echo "  Version    : ${LATEST_VERSION}"
-            echo "  Wait       : ${SH_STARTUP_DELAY[$app]} seconds"
-            echo "  Health URL : ${SH_HEALTH_URL[$app]}"
+
+            if [[ -n "${SH_HEALTH_URL[$app]:-}" ]]; then
+                echo "  Wait       : ${SH_STARTUP_DELAY[$app]} seconds"
+                echo "  Health URL : ${SH_HEALTH_URL[$app]}"
+                echo "  Health     : REQUIRED"
+            else
+                echo "  Health URL : not configured"
+                echo "  Health     : SKIPPED"
+            fi
+
             echo
-            echo "  If ${app} fails, stop the sequence and rollback immediately."
+            echo "  Service/JVM/Tomcat validation is always REQUIRED."
+            echo "  If a required validation fails, rollback starts immediately."
             echo
 
             step=$((step + 1))
         done
 
-        echo "STEP ${step} - Shared rollback if ANY application fails"
+        echo "STEP ${step} - Shared rollback if ANY required validation fails"
         echo
         echo "  Stop all shared applications"
         echo "  Restore ${TOMCAT_LINK} -> ${REAL_HOME}"
@@ -1753,15 +1695,12 @@ perform_dryrun()
             echo "    ${app}"
         done
 
-        echo
-
     else
 
         echo "STEP ${step} - Create application backup"
         echo
         echo "  ${BACKUP_ROOT}/${APP}/<timestamp>"
         echo
-
         step=$((step + 1))
 
         echo "STEP ${step} - Stop Tomcat"
@@ -1777,16 +1716,14 @@ perform_dryrun()
         esac
 
         echo
-
         step=$((step + 1))
 
         if [[ "${JULI_PRESENT}" == "true" ]]; then
 
             echo "STEP ${step} - Update tomcat-juli.jar"
             echo
-            echo "  install -o ${SERVICE_USER} -g ${SERVICE_GROUP} -m ${JULI_MODE} \\"
-            echo "    ${NEW_HOME}/bin/tomcat-juli.jar \\"
-            echo "    ${CATALINA_BASE}/bin/tomcat-juli.jar"
+            echo "  ${NEW_HOME}/bin/tomcat-juli.jar"
+            echo "    -> ${CATALINA_BASE}/bin/tomcat-juli.jar"
             echo
 
             step=$((step + 1))
@@ -1796,23 +1733,30 @@ perform_dryrun()
         echo
         echo "  ln -sfn ${NEW_HOME} ${TOMCAT_LINK}"
         echo
-
         step=$((step + 1))
 
         echo "STEP ${step} - Start and validate ${APP}"
         echo
-        echo "  Service    : ${SERVICE_NAME}"
-        echo "  Wait       : ${STARTUP_DELAY} seconds"
-        echo "  Health URL : ${HEALTH_URL}"
-        echo
+        echo "  Service : ${SERVICE_NAME}"
 
+        if [[ -n "${HEALTH_URL:-}" ]]; then
+            echo "  Wait       : ${STARTUP_DELAY} seconds"
+            echo "  Health URL : ${HEALTH_URL}"
+            echo "  Health     : REQUIRED"
+        else
+            echo "  Health URL : not configured"
+            echo "  Health     : SKIPPED"
+        fi
+
+        echo
+        echo "  Service/JVM/Tomcat validation is always REQUIRED."
+        echo
         step=$((step + 1))
 
-        echo "STEP ${step} - Rollback automatically on failure"
+        echo "STEP ${step} - Rollback automatically on required validation failure"
         echo
         echo "  Restore ${TOMCAT_LINK} -> ${REAL_HOME}"
         echo "  Restart ${SERVICE_NAME}"
-        echo
     fi
 
     echo
@@ -1824,7 +1768,7 @@ perform_dryrun()
 
 
 # ============================================================
-# DOWNLOAD
+# DOWNLOAD / CHECKSUM / EXTRACT
 # ============================================================
 
 download_new_tomcat()
@@ -1880,10 +1824,6 @@ verify_checksum()
 }
 
 
-# ============================================================
-# EXTRACT
-# ============================================================
-
 extract_new_tomcat()
 {
     local detected_version
@@ -1902,7 +1842,9 @@ extract_new_tomcat()
     [[ -d "${NEW_HOME}" ]] || \
         die "Tomcat extraction failed."
 
-    chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${NEW_HOME}"
+    chown -R \
+        "${SERVICE_USER}:${SERVICE_GROUP}" \
+        "${NEW_HOME}"
 
     detected_version="$(
         get_tomcat_version "${NEW_HOME}"
@@ -1920,7 +1862,7 @@ extract_new_tomcat()
 
 
 # ============================================================
-# SINGLE APPLICATION BACKUP
+# BACKUPS
 # ============================================================
 
 create_backup()
@@ -1974,10 +1916,6 @@ EOF
 }
 
 
-# ============================================================
-# SHARED APPLICATION BACKUPS
-# ============================================================
-
 create_shared_backups()
 {
     local app
@@ -2019,9 +1957,10 @@ OLD_HOME=${REAL_HOME}
 OLD_VERSION=${CURRENT_VERSION}
 NEW_HOME=${NEW_HOME}
 NEW_VERSION=${LATEST_VERSION}
+HEALTH_URL=${SH_HEALTH_URL[$app]}
+STARTUP_DELAY=${SH_STARTUP_DELAY[$app]}
 SHARED_APPS=${SHARED_APPS}
 EOF
-
     done
 }
 
@@ -2070,7 +2009,6 @@ update_shared_juli()
             -m "${SH_JULI_MODE[$app]}" \
             "${NEW_HOME}/bin/tomcat-juli.jar" \
             "${SH_CATALINA_BASE[$app]}/bin/tomcat-juli.jar"
-
     done
 }
 
@@ -2089,7 +2027,6 @@ restore_shared_juli()
         cp -p \
             "${SH_JULI_BACKUP[$app]}" \
             "${SH_CATALINA_BASE[$app]}/bin/tomcat-juli.jar"
-
     done
 }
 
@@ -2102,11 +2039,25 @@ switch_to_new_tomcat()
 {
     info "Switching managed Tomcat symlink..."
 
+    [[ -n "${NEW_HOME}" ]] || \
+        die "NEW_HOME is empty. Refusing to modify Tomcat symlink."
+
+    [[ -n "${TOMCAT_LINK}" ]] || \
+        die "TOMCAT_LINK is empty. Refusing to modify Tomcat symlink."
+
+    [[ -d "${NEW_HOME}" ]] || \
+        die "New Tomcat HOME does not exist: ${NEW_HOME}"
+
+    info "New HOME     : ${NEW_HOME}"
+    info "Managed link : ${TOMCAT_LINK}"
+
     ln -sfn \
         "${NEW_HOME}" \
         "${TOMCAT_LINK}"
 
-    TOMCAT_LINK_TARGET="$(readlink -f "${TOMCAT_LINK}")"
+    TOMCAT_LINK_TARGET="$(
+        readlink -f "${TOMCAT_LINK}"
+    )"
 
     [[ "${TOMCAT_LINK_TARGET}" == "${NEW_HOME}" ]] || \
         die "Failed to switch ${TOMCAT_LINK}"
@@ -2119,18 +2070,35 @@ switch_to_old_tomcat()
 {
     info "Restoring previous Tomcat symlink..."
 
+    [[ -n "${REAL_HOME}" ]] || \
+        die "REAL_HOME is empty. Cannot rollback Tomcat symlink."
+
+    [[ -n "${TOMCAT_LINK}" ]] || \
+        die "TOMCAT_LINK is empty. Cannot rollback Tomcat symlink."
+
+    [[ -d "${REAL_HOME}" ]] || \
+        die "Previous Tomcat HOME does not exist: ${REAL_HOME}"
+
+    info "Previous HOME : ${REAL_HOME}"
+    info "Managed link  : ${TOMCAT_LINK}"
+
     ln -sfn \
         "${REAL_HOME}" \
         "${TOMCAT_LINK}"
 
-    TOMCAT_LINK_TARGET="$(readlink -f "${TOMCAT_LINK}")"
+    TOMCAT_LINK_TARGET="$(
+        readlink -f "${TOMCAT_LINK}"
+    )"
 
-    [[ "${TOMCAT_LINK_TARGET}" == "${REAL_HOME}" ]]
+    [[ "${TOMCAT_LINK_TARGET}" == "${REAL_HOME}" ]] || \
+        die "Failed to restore ${TOMCAT_LINK}"
+
+    info "${TOMCAT_LINK} -> ${REAL_HOME}"
 }
 
 
 # ============================================================
-# WAIT FOR SERVICE
+# WAIT / VALIDATION
 # ============================================================
 
 wait_for_service_values()
@@ -2166,10 +2134,6 @@ wait_for_service_values()
 }
 
 
-# ============================================================
-# VALIDATE A RUNNING APPLICATION
-# ============================================================
-
 validate_application_runtime()
 {
     local app="$1"
@@ -2179,7 +2143,7 @@ validate_application_runtime()
     local name="${SH_SERVICE_NAME[$app]}"
     local base="${SH_CATALINA_BASE[$app]}"
     local home="${SH_TOMCAT_LINK[$app]}"
-    local url="${SH_HEALTH_URL[$app]}"
+    local url="${SH_HEALTH_URL[$app]:-}"
     local delay="${SH_STARTUP_DELAY[$app]}"
 
     local pid
@@ -2190,7 +2154,11 @@ validate_application_runtime()
 
     info "Validating ${app}..."
 
-    if ! wait_for_service_values "${type}" "${name}" "${base}"; then
+    if ! wait_for_service_values \
+        "${type}" \
+        "${name}" \
+        "${base}"
+    then
         error "${app}: service failed to start."
         return 1
     fi
@@ -2235,10 +2203,27 @@ validate_application_runtime()
         return 1
     }
 
-    if ! health_url_retry_values "${url}" "${delay}"; then
+    info "${app}: service/JVM/Tomcat validation PASSED."
 
-        error "${app}: application health validation failed."
-        return 1
+    if [[ -n "${url}" ]]; then
+
+        info "${app}: validating application health."
+        info "${app}: ${url}"
+
+        if ! health_url_retry_values \
+            "${url}" \
+            "${delay}"
+        then
+            error "${app}: application health validation failed."
+            return 1
+        fi
+
+        info "${app}: application health validation PASSED."
+
+    else
+
+        info "${app}: application health validation SKIPPED."
+        info "${app}: no HEALTH_URL configured."
     fi
 
     info "${app}: validation PASSED."
@@ -2248,7 +2233,7 @@ validate_application_runtime()
 
 
 # ============================================================
-# SINGLE APPLICATION POST VALIDATION
+# SINGLE POST-UPGRADE VALIDATION
 # ============================================================
 
 post_upgrade_validation()
@@ -2269,7 +2254,6 @@ post_upgrade_validation()
         "${SERVICE_NAME}" \
         "${CATALINA_BASE}"
     then
-
         printf "%-34s FAIL\n" "Service status"
         return 1
     fi
@@ -2284,7 +2268,6 @@ post_upgrade_validation()
     if [[ "${process_home}" != "${TOMCAT_LINK}" ||
           "${process_base}" != "${CATALINA_BASE}" ]]
     then
-
         printf "%-34s FAIL\n" "Running JVM configuration"
         return 1
     fi
@@ -2295,25 +2278,27 @@ post_upgrade_validation()
         get_tomcat_version "$(readlink -f "${TOMCAT_LINK}")"
     )"
 
-    active_version="$(
-        normalize_version "${active_version}"
-    )"
+    active_version="$(normalize_version "${active_version}")"
 
     if [[ "${active_version}" != "${LATEST_VERSION}" ]]; then
-
         printf "%-34s FAIL\n" "Tomcat version"
         return 1
     fi
 
     printf "%-34s PASS\n" "Tomcat version"
 
-    if ! validate_health_url_retry; then
+    if [[ -n "${HEALTH_URL:-}" ]]; then
 
-        printf "%-34s FAIL\n" "Application health check"
-        return 1
+        if ! validate_health_url_retry; then
+            printf "%-34s FAIL\n" "Application health check"
+            return 1
+        fi
+
+        printf "%-34s PASS\n" "Application health check"
+
+    else
+        printf "%-34s SKIPPED\n" "Application health check"
     fi
-
-    printf "%-34s PASS\n" "Application health check"
 
     echo
     line
@@ -2323,7 +2308,7 @@ post_upgrade_validation()
 
 
 # ============================================================
-# SINGLE APPLICATION ROLLBACK
+# SINGLE ROLLBACK
 # ============================================================
 
 rollback()
@@ -2343,15 +2328,20 @@ rollback()
         "${SERVICE_NAME}" \
         "${CATALINA_BASE}"
     then
-
         error "ROLLBACK FAILED: previous Tomcat did not start."
         return 1
     fi
 
-    if ! validate_health_url_retry; then
+    if [[ -n "${HEALTH_URL:-}" ]]; then
 
-        error "ROLLBACK FAILED: application health check failed."
-        return 1
+        if ! validate_health_url_retry; then
+            error "ROLLBACK FAILED: application health check failed."
+            return 1
+        fi
+
+    else
+        info "Rollback functional health validation skipped."
+        info "No HEALTH_URL configured."
     fi
 
     info "Rollback completed successfully."
@@ -2361,7 +2351,7 @@ rollback()
 
 
 # ============================================================
-# SHARED STOP
+# SHARED STOP / START
 # ============================================================
 
 stop_shared_apps()
@@ -2378,7 +2368,6 @@ stop_shared_apps()
             "${SH_SERVICE_TYPE[$app]}" \
             "${SH_SERVICE_NAME[$app]}" || \
             die "Failed to stop ${app}."
-
     done
 
     for app in "${SHARED_APP_LIST[@]}"; do
@@ -2387,17 +2376,11 @@ stop_shared_apps()
             "${SH_SERVICE_TYPE[$app]}" \
             "${SH_SERVICE_NAME[$app]}"
         then
-
             die "${app} is still running after stop."
         fi
-
     done
 }
 
-
-# ============================================================
-# SHARED START / VALIDATE
-# ============================================================
 
 start_validate_shared_apps()
 {
@@ -2417,28 +2400,18 @@ start_validate_shared_apps()
             "${SH_SERVICE_TYPE[$app]}" \
             "${SH_SERVICE_NAME[$app]}"
         then
-
             error "${app}: service start command failed."
             return 1
         fi
 
-        #
-        # IMPORTANT:
-        #
-        # Do not start the next application unless the current
-        # application passes every validation.
-        #
         if ! validate_application_runtime \
             "${app}" \
             "${LATEST_VERSION}"
         then
-
             error "${app}: validation failed."
             error "Remaining shared applications will NOT be started."
-
             return 1
         fi
-
     done
 
     return 0
@@ -2461,32 +2434,21 @@ rollback_shared()
 
     warn "Rolling back shared Tomcat to ${CURRENT_VERSION_COMPARE}..."
 
-    #
-    # Stop every shared application that may currently be running.
-    #
     for app in "${SHARED_APP_LIST[@]}"; do
 
         service_stop_values \
             "${SH_SERVICE_TYPE[$app]}" \
             "${SH_SERVICE_NAME[$app]}" \
             >/dev/null 2>&1 || true
-
     done
 
     restore_shared_juli
 
     if ! switch_to_old_tomcat; then
-
         error "CRITICAL: Could not restore previous Tomcat symlink."
         return 1
     fi
 
-    #
-    # Restart and validate sequentially.
-    #
-    # If one application fails rollback validation, do not start
-    # any remaining application.
-    #
     for app in "${SHARED_APP_LIST[@]}"; do
 
         echo
@@ -2496,12 +2458,10 @@ rollback_shared()
             "${SH_SERVICE_TYPE[$app]}" \
             "${SH_SERVICE_NAME[$app]}"
         then
-
             error "ROLLBACK CRITICAL FAILURE"
             error "Application: ${app}"
             error "Service failed to start."
             error "Remaining applications were NOT started."
-
             return 1
         fi
 
@@ -2509,16 +2469,13 @@ rollback_shared()
             "${app}" \
             "${CURRENT_VERSION_COMPARE}"
         then
-
             error "ROLLBACK CRITICAL FAILURE"
             error "Application: ${app}"
             error "Previous Tomcat validation failed."
             error "Remaining applications were NOT started."
             error "Manual intervention required."
-
             return 1
         fi
-
     done
 
     info "Shared Tomcat rollback completed successfully."
@@ -2533,6 +2490,9 @@ rollback_shared()
 
 perform_shared_upgrade()
 {
+    local app
+    local number=1
+
     echo
     line
     echo " SHARED TOMCAT UPGRADE"
@@ -2547,15 +2507,18 @@ perform_shared_upgrade()
     echo
     echo "Startup / validation order:"
 
-    local app
-    local number=1
-
     for app in "${SHARED_APP_LIST[@]}"; do
 
-        printf "  %d. %s (%s)\n" \
+        printf "  %d. %s (%s)" \
             "${number}" \
             "${app}" \
             "${SH_SERVICE_NAME[$app]}"
+
+        if [[ -n "${SH_HEALTH_URL[$app]:-}" ]]; then
+            printf " [health required]\n"
+        else
+            printf " [health skipped]\n"
+        fi
 
         number=$((number + 1))
     done
@@ -2583,20 +2546,16 @@ perform_shared_upgrade()
         error "Shared Tomcat upgrade validation failed."
 
         if rollback_shared; then
-
             echo
             line
             echo " UPGRADE FAILED - SHARED ROLLBACK SUCCESSFUL"
             line
-
         else
-
             echo
             line
             echo " UPGRADE FAILED - SHARED ROLLBACK FAILED"
             echo " MANUAL INTERVENTION REQUIRED"
             line
-
         fi
 
         exit 1
@@ -2615,6 +2574,18 @@ perform_shared_upgrade()
     printf "%-28s : %s\n" "Applications" "${SHARED_APPS}"
 
     echo
+    echo "Functional validation:"
+
+    for app in "${SHARED_APP_LIST[@]}"; do
+
+        if [[ -n "${SH_HEALTH_URL[$app]:-}" ]]; then
+            printf "  %-24s PASS\n" "${app}"
+        else
+            printf "  %-24s SKIPPED\n" "${app}"
+        fi
+    done
+
+    echo
     line
 
     rm -rf "${WORK_DIR}"
@@ -2622,7 +2593,7 @@ perform_shared_upgrade()
 
 
 # ============================================================
-# SINGLE APPLICATION UPGRADE
+# SINGLE UPGRADE
 # ============================================================
 
 perform_single_upgrade()
@@ -2647,19 +2618,15 @@ perform_single_upgrade()
         error "Post-upgrade validation failed."
 
         if rollback; then
-
             echo
             line
             echo " UPGRADE FAILED - ROLLBACK SUCCESSFUL"
             line
-
         else
-
             echo
             line
             echo " UPGRADE FAILED - ROLLBACK FAILED"
             line
-
         fi
 
         exit 1
@@ -2678,6 +2645,12 @@ perform_single_upgrade()
     printf "%-28s : %s\n" "Current HOME" "${NEW_HOME}"
     printf "%-28s : %s\n" "Previous HOME" "${REAL_HOME}"
     printf "%-28s : %s\n" "Backup" "${BACKUP_DIR}"
+
+    if [[ -n "${HEALTH_URL:-}" ]]; then
+        printf "%-28s : %s\n" "Functional health" "PASS"
+    else
+        printf "%-28s : %s\n" "Functional health" "SKIPPED"
+    fi
 
     echo
     line
@@ -2715,7 +2688,6 @@ perform_upgrade()
     echo
 
     if [[ "${CURRENT_VERSION_COMPARE}" == "${LATEST_VERSION}" ]]; then
-
         info "Tomcat is already up to date."
         exit 0
     fi
@@ -2724,19 +2696,15 @@ perform_upgrade()
           "${ALLOW_SHARED_LINK}" == "true" &&
           ${#SHARED_APP_LIST[@]} -gt 1 ]]
     then
-
         perform_shared_upgrade
-
     else
-
         perform_single_upgrade
-
     fi
 }
 
 
 # ============================================================
-# USAGE
+# USAGE / MAIN
 # ============================================================
 
 usage()
@@ -2754,10 +2722,6 @@ usage()
     echo
 }
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 main()
 {
@@ -2778,24 +2742,19 @@ main()
     load_application_config
 
     case "${ACTION}" in
-
         --check)
             perform_check
             ;;
-
         --dryrun)
             perform_dryrun
             ;;
-
         --upgrade)
             perform_upgrade
             ;;
-
         *)
             usage
             exit 1
             ;;
-
     esac
 }
 
