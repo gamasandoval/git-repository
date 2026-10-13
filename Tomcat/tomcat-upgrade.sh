@@ -27,6 +27,7 @@
 #   CATALINA_BASE="/u01/app/tomcat/tc_APP_PROD_8080"
 #   HEALTH_URL="https://host:8080/app"
 #   STARTUP_DELAY=10
+#   SKIP_HEALTH_CHECK="false"  # Optional; true skips HTTP only
 #
 # Shared Tomcat example:
 #
@@ -90,6 +91,7 @@ FAIL_ON_LOG_ERRORS="false"
 
 APP=""
 ACTION=""
+FORCE_MANUAL_VALIDATION="false"
 
 
 # ============================================================
@@ -107,6 +109,7 @@ CATALINA_HOME=""
 CATALINA_BASE=""
 
 HEALTH_URL=""
+SKIP_HEALTH_CHECK="false"
 STARTUP_DELAY=""
 
 ALLOW_SHARED_LINK="false"
@@ -170,6 +173,7 @@ declare -A SH_CATALINA_HOME
 declare -A SH_CATALINA_BASE
 
 declare -A SH_HEALTH_URL
+declare -A SH_SKIP_HEALTH_CHECK
 declare -A SH_STARTUP_DELAY
 
 declare -A SH_SERVICE_USER
@@ -277,8 +281,15 @@ load_application_config()
     [[ -n "${CATALINA_BASE}" ]] || \
         die "CATALINA_BASE is not defined in ${config_file}"
 
-    [[ -n "${HEALTH_URL}" ]] || \
-        die "HEALTH_URL is not defined in ${config_file}"
+    SKIP_HEALTH_CHECK="${SKIP_HEALTH_CHECK:-false}"
+    case "${SKIP_HEALTH_CHECK}" in
+        true|false) ;;
+        *) die "SKIP_HEALTH_CHECK must be true or false." ;;
+    esac
+    if [[ "${SKIP_HEALTH_CHECK}" != "true" ]]; then
+        [[ -n "${HEALTH_URL}" ]] || \
+            die "HEALTH_URL is not defined in ${config_file}"
+    fi
 
     [[ -d "${TOMCAT_ROOT}" ]] || \
         die "TOMCAT_ROOT does not exist: ${TOMCAT_ROOT}"
@@ -952,6 +963,10 @@ validate_health_url()
 
 validate_preupgrade_health()
 {
+    if [[ "${SKIP_HEALTH_CHECK}" == "true" || "${FORCE_MANUAL_VALIDATION}" == "true" ]]; then
+        info "Application HTTP health precheck SKIPPED (configuration or --force)."
+        return 0
+    fi
     if validate_health_url; then
         info "Application health precheck passed."
     else
@@ -986,6 +1001,10 @@ health_url_retry_values()
 
 validate_health_url_retry()
 {
+    if [[ "${SKIP_HEALTH_CHECK}" == "true" ]]; then
+        info "Application HTTP health validation SKIPPED (explicit configuration)."
+        return 0
+    fi
     health_url_retry_values \
         "${HEALTH_URL}" \
         "${STARTUP_DELAY}"
@@ -1079,6 +1098,7 @@ load_shared_app_config()
     local c_catalina_home=""
     local c_catalina_base=""
     local c_health_url=""
+    local c_skip_health_check=""
     local c_startup_delay=""
     local c_allow_shared=""
     local c_shared_apps=""
@@ -1102,6 +1122,7 @@ load_shared_app_config()
     local saved_CATALINA_HOME="${CATALINA_HOME}"
     local saved_CATALINA_BASE="${CATALINA_BASE}"
     local saved_HEALTH_URL="${HEALTH_URL}"
+    local saved_SKIP_HEALTH_CHECK="${SKIP_HEALTH_CHECK}"
     local saved_STARTUP_DELAY="${STARTUP_DELAY}"
     local saved_ALLOW_SHARED_LINK="${ALLOW_SHARED_LINK}"
     local saved_SHARED_APPS="${SHARED_APPS}"
@@ -1124,6 +1145,7 @@ load_shared_app_config()
     CATALINA_HOME=""
     CATALINA_BASE=""
     HEALTH_URL=""
+    SKIP_HEALTH_CHECK="false"
     STARTUP_DELAY=""
     ALLOW_SHARED_LINK="false"
     SHARED_APPS=""
@@ -1138,6 +1160,7 @@ load_shared_app_config()
     c_catalina_home="${CATALINA_HOME:-}"
     c_catalina_base="${CATALINA_BASE}"
     c_health_url="${HEALTH_URL}"
+    c_skip_health_check="${SKIP_HEALTH_CHECK:-false}"
     c_startup_delay="${STARTUP_DELAY:-10}"
     c_allow_shared="${ALLOW_SHARED_LINK:-false}"
     c_shared_apps="${SHARED_APPS:-}"
@@ -1160,8 +1183,14 @@ load_shared_app_config()
     [[ -n "${c_catalina_base}" ]] || \
         die "CATALINA_BASE missing from ${app}.conf"
 
-    [[ -n "${c_health_url}" ]] || \
-        die "HEALTH_URL missing from ${app}.conf"
+    case "${c_skip_health_check}" in
+        true|false) ;;
+        *) die "${app}: SKIP_HEALTH_CHECK must be true or false." ;;
+    esac
+    if [[ "${c_skip_health_check}" != "true" ]]; then
+        [[ -n "${c_health_url}" ]] || \
+            die "HEALTH_URL missing from ${app}.conf"
+    fi
 
     [[ "${c_startup_delay}" =~ ^[0-9]+$ ]] || \
         die "Invalid STARTUP_DELAY in ${app}.conf"
@@ -1304,11 +1333,14 @@ load_shared_app_config()
     #
     # Pre-upgrade health validation.
     #
-    info "Checking shared application health: ${app}"
-    info "${c_health_url}"
-
-    health_url_check "${c_health_url}" || \
-        die "${app}: application health precheck failed."
+    if [[ "${c_skip_health_check}" == "true" || "${FORCE_MANUAL_VALIDATION}" == "true" ]]; then
+        info "${app}: HTTP health precheck SKIPPED (configuration or --force)."
+    else
+        info "Checking shared application health: ${app}"
+        info "${c_health_url}"
+        health_url_check "${c_health_url}" || \
+            die "${app}: application health precheck failed."
+    fi
 
     #
     # Store application metadata.
@@ -1323,6 +1355,7 @@ load_shared_app_config()
     SH_CATALINA_BASE["${app}"]="${c_catalina_base}"
 
     SH_HEALTH_URL["${app}"]="${c_health_url}"
+    SH_SKIP_HEALTH_CHECK["${app}"]="${c_skip_health_check}"
     SH_STARTUP_DELAY["${app}"]="${c_startup_delay}"
 
     SH_SERVICE_USER["${app}"]="${user}"
@@ -1354,6 +1387,7 @@ load_shared_app_config()
     CATALINA_HOME="${saved_CATALINA_HOME}"
     CATALINA_BASE="${saved_CATALINA_BASE}"
     HEALTH_URL="${saved_HEALTH_URL}"
+    SKIP_HEALTH_CHECK="${saved_SKIP_HEALTH_CHECK}"
     STARTUP_DELAY="${saved_STARTUP_DELAY}"
     ALLOW_SHARED_LINK="${saved_ALLOW_SHARED_LINK}"
     SHARED_APPS="${saved_SHARED_APPS}"
@@ -1452,39 +1486,25 @@ check_shared_link()
     local count
 
     references="$(get_link_references)"
+    count="$(printf '%s\n' "${references}" | sed '/^[[:space:]]*$/d' | wc -l)"
 
-    count="$(
-        printf '%s\n' "${references}" |
-        sed '/^[[:space:]]*$/d' |
-        wc -l
-    )"
-
-    if (( count <= 1 )); then
-
-        if (( count == 1 )); then
-            info "Managed Tomcat symlink is used by one service:"
-            info "${references}"
-        fi
-
+    # Explicit shared groups must ALWAYS be validated, even when service
+    # reference discovery misses SysV scripts or indirect references.
+    if [[ "${ALLOW_SHARED_LINK}" == "true" && -n "${SHARED_APPS}" ]]; then
+        validate_shared_group
         return 0
     fi
 
-    warn "${TOMCAT_LINK} is referenced by multiple services:"
-    printf '%s\n' "${references}"
-
-    if [[ "${ALLOW_SHARED_LINK}" != "true" ]]; then
-
-        die "Upgrade refused because the managed Tomcat symlink is shared."
-
+    if (( count > 1 )); then
+        warn "${TOMCAT_LINK} is referenced by multiple services:"
+        printf '%s\n' "${references}"
+        die "Upgrade refused: shared link requires ALLOW_SHARED_LINK=true and SHARED_APPS."
     fi
 
-    if [[ -z "${SHARED_APPS}" ]]; then
-
-        die "Managed Tomcat link is shared and ALLOW_SHARED_LINK=true, but SHARED_APPS is not configured."
-
+    if (( count == 1 )); then
+        info "Managed Tomcat symlink is used by one detected service:"
+        info "${references}"
     fi
-
-    validate_shared_group
 }
 
 
@@ -1540,7 +1560,8 @@ show_check_report()
     printf "%-28s : %s\n" "Tomcat major" "${CURRENT_MAJOR}"
     printf "%-28s : %s.x\n" "Tomcat branch" "${CURRENT_BRANCH}"
     printf "%-28s : %s\n" "Latest available" "${LATEST_VERSION}"
-    printf "%-28s : %s\n" "Health URL" "${HEALTH_URL}"
+    printf "%-28s : %s\n" "Health URL" "${HEALTH_URL:-SKIPPED}"
+    printf "%-28s : %s\n" "Skip HTTP health" "${SKIP_HEALTH_CHECK}"
     printf "%-28s : %s seconds\n" "Startup delay" "${STARTUP_DELAY}"
 
     echo
@@ -1596,6 +1617,7 @@ run_prechecks()
 perform_check()
 {
     run_prechecks
+    check_shared_link
     show_check_report
 }
 
@@ -1732,7 +1754,11 @@ perform_dryrun()
             echo "  BASE       : ${SH_CATALINA_BASE[$app]}"
             echo "  Version    : ${LATEST_VERSION}"
             echo "  Wait       : ${SH_STARTUP_DELAY[$app]} seconds"
-            echo "  Health URL : ${SH_HEALTH_URL[$app]}"
+            if [[ "${SH_SKIP_HEALTH_CHECK[$app]}" == "true" ]]; then
+                echo "  HTTP check : SKIPPED (service/JVM validation remains required)"
+            else
+                echo "  Health URL : ${SH_HEALTH_URL[$app]}"
+            fi
             echo
             echo "  If ${app} fails, stop the sequence and rollback immediately."
             echo
@@ -1955,6 +1981,7 @@ SERVICE_GROUP=${SERVICE_GROUP}
 JAVA_HOME=${JAVA_HOME}
 JAVA_BIN=${JAVA_BIN}
 HEALTH_URL=${HEALTH_URL}
+SKIP_HEALTH_CHECK=${SKIP_HEALTH_CHECK}
 STARTUP_DELAY=${STARTUP_DELAY}
 EOF
 
@@ -2020,6 +2047,7 @@ OLD_VERSION=${CURRENT_VERSION}
 NEW_HOME=${NEW_HOME}
 NEW_VERSION=${LATEST_VERSION}
 SHARED_APPS=${SHARED_APPS}
+SKIP_HEALTH_CHECK=${SH_SKIP_HEALTH_CHECK[$app]}
 EOF
 
     done
@@ -2180,6 +2208,7 @@ validate_application_runtime()
     local base="${SH_CATALINA_BASE[$app]}"
     local home="${SH_TOMCAT_LINK[$app]}"
     local url="${SH_HEALTH_URL[$app]}"
+    local skip_health="${SH_SKIP_HEALTH_CHECK[$app]}"
     local delay="${SH_STARTUP_DELAY[$app]}"
 
     local pid
@@ -2235,8 +2264,9 @@ validate_application_runtime()
         return 1
     }
 
-    if ! health_url_retry_values "${url}" "${delay}"; then
-
+    if [[ "${skip_health}" == "true" || "${FORCE_MANUAL_VALIDATION}" == "true" ]]; then
+        info "${app}: HTTP health validation SKIPPED (configuration or --force)."
+    elif ! health_url_retry_values "${url}" "${delay}"; then
         error "${app}: application health validation failed."
         return 1
     fi
@@ -2307,7 +2337,7 @@ post_upgrade_validation()
 
     printf "%-34s PASS\n" "Tomcat version"
 
-    if ! validate_health_url_retry; then
+    if [[ "${FORCE_MANUAL_VALIDATION}" != "true" ]] && ! validate_health_url_retry; then
 
         printf "%-34s FAIL\n" "Application health check"
         return 1
@@ -2348,7 +2378,7 @@ rollback()
         return 1
     fi
 
-    if ! validate_health_url_retry; then
+    if [[ "${FORCE_MANUAL_VALIDATION}" != "true" ]] && ! validate_health_url_retry; then
 
         error "ROLLBACK FAILED: application health check failed."
         return 1
@@ -2391,6 +2421,29 @@ stop_shared_apps()
             die "${app} is still running after stop."
         fi
 
+    done
+
+    # Never switch a shared Tomcat symlink while a declared JVM is alive.
+    # Check the original PIDs as well as any new matching CATALINA_BASE JVM.
+    for app in "${SHARED_APP_LIST[@]}"; do
+        local old_pid="${SH_PID[$app]:-}"
+        local base="${SH_CATALINA_BASE[$app]}"
+        local remaining=""
+        local attempts=0
+
+        while (( attempts < 30 )); do
+            remaining="$(pgrep -f -- "-Dcatalina.base=${base}" || true)"
+            if [[ -z "${remaining}" ]] &&                { [[ -z "${old_pid}" ]] || ! kill -0 "${old_pid}" 2>/dev/null; }; then
+                break
+            fi
+            sleep 2
+            attempts=$((attempts + 1))
+        done
+
+        remaining="$(pgrep -f -- "-Dcatalina.base=${base}" || true)"
+        if [[ -n "${remaining}" ]] ||            { [[ -n "${old_pid}" ]] && kill -0 "${old_pid}" 2>/dev/null; }; then
+            die "${app}: JVM still running after stop; refusing to switch shared symlink."
+        fi
     done
 }
 
@@ -2694,6 +2747,11 @@ perform_upgrade()
 {
     require_root
 
+    if [[ "${FORCE_MANUAL_VALIDATION}" == "true" ]]; then
+        warn "FORCE MODE: HTTP validation disabled for this upgrade; manual application validation REQUIRED."
+        warn "Service, PID, JVM, version, shared group, backups and rollback remain mandatory."
+    fi
+
     run_prechecks
     check_shared_link
 
@@ -2746,7 +2804,7 @@ usage()
     echo
     echo "  $0 --app <application> --check"
     echo "  $0 --app <application> --dryrun"
-    echo "  $0 --app <application> --upgrade"
+    echo "  $0 --app <application> --upgrade [--force]"
     echo
     echo "Application configuration:"
     echo
@@ -2761,7 +2819,7 @@ usage()
 
 main()
 {
-    if [[ $# -ne 3 ]]; then
+    if [[ $# -ne 3 && $# -ne 4 ]]; then
         usage
         exit 1
     fi
@@ -2773,6 +2831,14 @@ main()
 
     APP="$2"
     ACTION="$3"
+
+    if [[ $# -eq 4 ]]; then
+        [[ "${ACTION}" == "--upgrade" && "$4" == "--force" ]] || {
+            usage
+            exit 1
+        }
+        FORCE_MANUAL_VALIDATION="true"
+    fi
 
     validate_application
     load_application_config
